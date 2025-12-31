@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import re
 import os
 import pandas as pd
-import urllib.parse # <--- NUEVA LIBRERÍA PARA WHATSAPP
+import urllib.parse
 from streamlit_gsheets import GSheetsConnection
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
@@ -115,6 +115,8 @@ def generar_pdf(cliente, folio, carrito, lleva_iva):
         pdf.set_xy(x + 120, y)
         x_precio = pdf.get_x()
         pdf.rect(x_precio, y, 30, h, 'F')
+        
+        # Solo mostramos precio tachado si NO es precio manual y hay descuento real
         if item.get('original') and item['original'] > item['unitario']:
             pdf.set_font('Arial', '', 7)
             pdf.set_text_color(150, 150, 150)
@@ -131,6 +133,7 @@ def generar_pdf(cliente, folio, carrito, lleva_iva):
         else:
             pdf.set_text_color(0,0,0)
             pdf.cell(30, h, f"${item['unitario']:,.2f}", 0, 0, 'R')
+        
         pdf.cell(30, h, f"${item['total']:,.2f}", 0, 1, 'R', 1)
         gran_total += item['total']
         fill = not fill
@@ -194,7 +197,7 @@ def main():
 
     siguiente_folio = ultimo_folio + 1
 
-    # 1. CLIENTE (MODIFICADO CON CAMPO DE WHATSAPP)
+    # 1. CLIENTE
     st.markdown("### 👤 Datos del Cliente")
     col_nom, col_fol = st.columns([3, 1])
     with col_nom:
@@ -202,52 +205,112 @@ def main():
     with col_fol:
         folio = st.number_input("Folio", value=siguiente_folio)
     
-    # Campo para WhatsApp
     tel_cliente = st.text_input("📱 WhatsApp del Cliente (10 dígitos)", placeholder="Ej: 8110754372")
 
-    # 2. CONFIGURADOR
+    st.markdown("---")
+    # --- INTERRUPTOR DE MODO MANUAL ---
+    modo_manual = st.toggle("🔧 Activar Precios Personalizados (Modo Libre)", value=False)
+    if modo_manual:
+        st.warning("⚠️ Modo Precios Libres Activado: Tú defines los costos.")
+
+    # 2. CONFIGURADOR GPS
     st.markdown("### 🛰️ GPS + Planes")
     with st.container():
-        st.info("Configurador Rápido de Flotillas")
+        st.info("Configurador Rápido")
         col_cant, col_plan = st.columns(2)
+        
         with col_cant:
             cant_gps = st.number_input("Cantidad de GPS", min_value=0, value=0)
-            desc_flotilla = st.toggle("¿Aplicar Descuento Flotilla?", value=False)
-            if desc_flotilla: st.caption("✅ Precio baja a $1,700")
-            else: st.caption("Precio normal: $2,200")
-        with col_plan:
-            tipo_plan = st.radio("Plan de Servicio", ["Anual ($1,800)", "Mensual ($300)"])
+            # Solo mostramos el toggle de descuento si NO estamos en modo manual
+            if not modo_manual:
+                desc_flotilla = st.toggle("¿Aplicar Descuento Flotilla?", value=False)
+                if desc_flotilla: st.caption("✅ Precio baja a $1,700")
+                else: st.caption("Precio normal: $2,200")
+            else:
+                desc_flotilla = False # En manual controlas el precio directo
+                precio_gps_manual = st.number_input("💵 Precio Unitario GPS", value=2200.0, step=100.0)
 
-    # 3. OTROS
-    with st.expander("📷 Dashcams, Sensores y Accesorios"):
+        with col_plan:
+            tipo_plan = st.radio("Plan de Servicio", ["Anual", "Mensual"])
+            if modo_manual:
+                precio_plan_manual = st.number_input("💵 Precio del Plan", value=(1800.0 if "Anual" in tipo_plan else 300.0), step=50.0)
+
+    # 3. OTROS PRODUCTOS
+    with st.expander("📷 Dashcams y Accesorios"):
         carrito_extra = []
         for k, v in CATALOGO.items():
             if k in [1, 2, 3]: continue
             titulo = v['nombre'].split('\n')[0]
-            c = st.number_input(f"{titulo} (${v['precio']})", min_value=0, key=k)
-            if c > 0: carrito_extra.append({"cant": c, "item": v})
+            
+            # Si es modo manual, permitimos editar precio
+            if modo_manual:
+                cols = st.columns([2, 1])
+                c = cols[0].number_input(f"{titulo}", min_value=0, key=f"q_{k}")
+                p = cols[1].number_input(f"Precio", value=float(v['precio']), key=f"p_{k}")
+                if c > 0:
+                    item_custom = v.copy()
+                    item_custom['precio'] = p # Sobrescribimos precio
+                    carrito_extra.append({"cant": c, "item": item_custom})
+            else:
+                c = st.number_input(f"{titulo} (${v['precio']})", min_value=0, key=k)
+                if c > 0: carrito_extra.append({"cant": c, "item": v})
+
+    # --- SECCIÓN EXTRA PERSONALIZADA (SOLO EN MODO MANUAL) ---
+    custom_item = None
+    if modo_manual:
+        st.markdown("### ✍️ Concepto 100% Personalizado")
+        with st.container(border=True):
+            c_desc = st.text_input("Descripción del Servicio Extra", placeholder="Ej: Mano de obra especial...")
+            c_col1, c_col2 = st.columns(2)
+            c_precio = c_col1.number_input("Precio Unitario", value=0.0)
+            c_cant = c_col2.number_input("Cantidad", value=0, min_value=0)
+            if c_desc and c_cant > 0:
+                custom_item = {"cant": c_cant, "desc": c_desc, "unitario": c_precio, "total": c_precio * c_cant}
 
     # 4. EXTRAS
     st.markdown("### 🚚 Extras")
     costo_envio = st.number_input("Costo Viáticos / Domicilio ($)", min_value=0.0, step=50.0)
     lleva_iva = st.checkbox("¿Agregar 16% IVA al final?")
 
-    # --- BOTONES DE ACCIÓN (MODIFICADO CON WHATSAPP) ---
+    # --- BOTONES DE ACCIÓN ---
     if st.button("💾 REGISTRAR VENTA Y GENERAR PDF", type="primary", use_container_width=True):
         carrito = []
+        
+        # LOGICA GPS
         if cant_gps > 0:
-            precio_gps = 1700 if desc_flotilla else 2200
-            orig_gps = 2200 if desc_flotilla else None
-            nom_gps = CATALOGO[1]['nombre']
-            if desc_flotilla: nom_gps += "\n   >> PRECIO ESPECIAL FLOTILLAS (Desc. Aplicado)"
+            # Definimos precio según el modo
+            if modo_manual:
+                precio_gps = precio_gps_manual
+                orig_gps = None # No tachamos precio en manual
+                nom_gps = CATALOGO[1]['nombre']
+            else:
+                precio_gps = 1700 if desc_flotilla else 2200
+                orig_gps = 2200 if desc_flotilla else None
+                nom_gps = CATALOGO[1]['nombre']
+                if desc_flotilla: nom_gps += "\n   >> PRECIO ESPECIAL FLOTILLAS (Desc. Aplicado)"
+            
             carrito.append({"cant": cant_gps, "desc": nom_gps, "unitario": precio_gps, "total": precio_gps*cant_gps, "original": orig_gps})
+            
+            # Definimos precio plan
             id_plan = 3 if "Anual" in tipo_plan else 2
             prod_plan = CATALOGO[id_plan]
-            carrito.append({"cant": cant_gps, "desc": prod_plan['nombre'], "unitario": prod_plan['precio'], "total": prod_plan['precio']*cant_gps, "original": None})
+            
+            if modo_manual:
+                precio_plan = precio_plan_manual
+            else:
+                precio_plan = prod_plan['precio']
+                
+            carrito.append({"cant": cant_gps, "desc": prod_plan['nombre'], "unitario": precio_plan, "total": precio_plan*cant_gps, "original": None})
 
+        # LOGICA EXTRAS (Ya vienen procesados arriba)
         for extra in carrito_extra:
             carrito.append({"cant": extra['cant'], "desc": extra['item']['nombre'], "unitario": extra['item']['precio'], "total": extra['item']['precio']*extra['cant'], "original": None})
 
+        # LOGICA CUSTOM ITEM (MANUAL)
+        if custom_item:
+            carrito.append(custom_item)
+
+        # LOGICA VIATICOS
         if costo_envio > 0:
             carrito.append({"cant": 1, "desc": "SERVICIO A DOMICILIO / VIÁTICOS", "unitario": costo_envio, "total": costo_envio, "original": None})
 
@@ -275,7 +338,7 @@ def main():
                             "Folio": folio,
                             "Cliente": cliente,
                             "Total": total_venta,
-                            "Telefono": tel_cliente # Guardamos también el cel
+                            "Telefono": tel_cliente
                         }])
                         df_updated = pd.concat([df, nueva_fila], ignore_index=True)
                         conn.update(data=df_updated)
@@ -284,33 +347,19 @@ def main():
             
             if guardado_exitoso: st.success(f"✅ Venta Registrada. Folio {folio}.")
 
-            # --- ZONA DE DESCARGA Y WHATSAPP ---
             col_descarga, col_wa = st.columns(2)
-            
             with col_descarga:
-                st.download_button(
-                    label="📥 1. DESCARGAR PDF",
-                    data=pdf_bytes,
-                    file_name=nombre_archivo,
-                    mime="application/pdf",
-                    type="primary",
-                    use_container_width=True
-                )
-            
+                st.download_button("📥 1. DESCARGAR PDF", pdf_bytes, nombre_archivo, "application/pdf", type="primary", use_container_width=True)
             with col_wa:
                 if tel_cliente:
-                    # Limpieza del teléfono
                     tel_clean = re.sub(r'[^0-9]', '', tel_cliente)
-                    if len(tel_clean) == 10: tel_clean = "52" + tel_clean # Agrega Lada MX si faltó
-                    
-                    # Mensaje personalizado
+                    if len(tel_clean) == 10: tel_clean = "52" + tel_clean
                     mensaje = f"Hola *{cliente.upper()}*, gusto en saludarte. 👋\n\nTe comparto la cotización solicitada con Folio *#{folio}*.\n\nQuedo pendiente para cualquier duda.\nSaludos!"
                     mensaje_encoded = urllib.parse.quote(mensaje)
                     link_wa = f"https://wa.me/{tel_clean}?text={mensaje_encoded}"
-                    
                     st.link_button("📱 2. ENVIAR POR WA", link_wa, type="secondary", use_container_width=True)
                 else:
-                    st.info("Escribe el teléfono arriba para activar el botón de WA.")
+                    st.info("Escribe el teléfono arriba.")
 
 if __name__ == "__main__":
     main()

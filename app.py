@@ -42,7 +42,6 @@ class PDF(FPDF):
             self.image("logo.png", 10, 5, 30)
 
         # 3. TÍTULO
-        # Usamos w=0 para que ocupe todo el ancho hasta el margen derecho
         self.set_font('Arial', 'B', 20)
         self.set_text_color(255, 255, 255)
         self.set_xy(0, 8)
@@ -193,6 +192,31 @@ def generar_pdf(cliente, folio, carrito, lleva_iva):
     pdf.set_font('Arial', 'B', 12)
     pdf.cell(35, 10, "TOTAL NETO:", 1, 0, 'R', 1)
     pdf.cell(30, 10, f"${total:,.2f}", 1, 1, 'R', 1)
+    
+    # LEYENDA DEL IVA (SOLO SI NO LLEVA IVA)
+    if not lleva_iva:
+        pdf.ln(2)
+        pdf.set_x(x_start - 20)
+        pdf.set_font('Arial', 'I', 8)
+        pdf.set_text_color(200, 0, 0)
+        pdf.cell(85, 5, "* Precios más IVA en caso de requerir factura.", 0, 1, 'R')
+
+    # --- SECCIÓN: DATOS BANCARIOS (ACTUALIZADA) ---
+    pdf.ln(15)
+    
+    # Ahora ocupamos todo el ancho porque quitamos la firma
+    pdf.set_font('Arial', 'B', 9)
+    pdf.set_text_color(*COLOR_PRIMARIO)
+    pdf.cell(0, 5, "DATOS BANCARIOS PARA DEPÓSITO / TRANSFERENCIA:", 0, 1)
+    
+    pdf.set_font('Arial', '', 8)
+    pdf.set_text_color(50, 50, 50)
+    pdf.ln(2)
+    pdf.cell(0, 4, "Banco: BANAMEX", 0, 1)
+    pdf.cell(0, 4, "Beneficiario: FERNANDO MANUEL ARAIZA NAVA", 0, 1)
+    pdf.cell(0, 4, "Tarjeta Débito: 5204 1660 0460 5095", 0, 1)
+    pdf.cell(0, 4, "CLABE Interbancaria: 002580700958459576", 0, 1)
+    pdf.cell(0, 4, "Concepto de pago: Favor de incluir su NÚMERO DE FOLIO", 0, 1)
 
     return pdf.output(dest='S').encode('latin-1')
 

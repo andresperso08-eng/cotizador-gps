@@ -2,17 +2,17 @@ import streamlit as st
 from fpdf import FPDF
 from datetime import datetime, timedelta
 import re
+import os  # <--- IMPORTANTE: Necesario para buscar el logo
 
-# --- CONFIGURACIÓN DE LA PÁGINA (Para que se vea bien en celular) ---
+# --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Cotizador GPS", page_icon="🛰️", layout="centered")
 
-# --- ESTILOS VISUALES (Tu paleta de colores) ---
+# --- ESTILOS VISUALES ---
 COLOR_PRIMARIO = (18, 52, 89)      # Azul Marino
 COLOR_SECUNDARIO = (255, 195, 0)   # Amarillo
 COLOR_GRIS_CLARO = (245, 245, 245)
-COLOR_TACHADO = (150, 50, 50)
 
-# --- TU CATÁLOGO MAESTRO (Versión 9.0 con descripciones completas) ---
+# --- TU CATÁLOGO MAESTRO ---
 CATALOGO = {
     1: {"nombre": "GPS RASTREADOR 4G PRO\n   + Instalación Oculta y Profesional\n   + Bloqueo de Motor a Distancia\n   + Batería de Respaldo Interna\n   + Conectividad Híbrida 4G-2G", "precio": 2200, "alias": "GPS"},
     2: {"nombre": "PLAN MENSUAL DE SERVICIO\n   + Plataforma Web y App (Android/iOS)\n   + Ubicación en Tiempo Real (30s)\n   + Historial de Rutas (3 Meses)\n   + Alertas de Seguridad", "precio": 300, "alias": "SvcMes"},
@@ -26,19 +26,36 @@ CATALOGO = {
     10: {"nombre": "GPS Magnético (Portátil)\n   + Cero Instalación\n   + Inc. 1 año servicio", "precio": 5500, "alias": "GPSMag"}
 }
 
-# --- CLASE PDF (El diseño bonito que hicimos) ---
+# --- CLASE PDF ---
 class PDF(FPDF):
     def header(self):
+        # 1. LOGO EN EL PDF
+        # Verifica si el archivo existe antes de ponerlo
+        if os.path.exists("logo.png"):
+            # x=10, y=8, w=33 (ancho)
+            self.image("logo.png", 10, 8, 33)
+        
         # Franja Azul
         self.set_fill_color(*COLOR_PRIMARIO)
+        # Ajustamos la posición para que no tape el logo si es muy grande
+        self.set_xy(0, 0)
+        # Dibujamos un rectángulo que empieza DESPUÉS del logo visualmente si quieres, 
+        # o mantenemos el diseño original de cabecera completa:
         self.rect(0, 0, 210, 40, 'F')
+        
+        # Volvemos a poner el logo ENCIMA del rectángulo azul (para que se vea)
+        if os.path.exists("logo.png"):
+            self.image("logo.png", 10, 5, 30) # Ajusta tamaño y posición aquí
+
         # Título
         self.set_font('Arial', 'B', 20)
         self.set_text_color(255, 255, 255)
-        self.cell(0, 15, 'COTIZACIÓN', 0, 1, 'R')
+        self.set_xy(0, 10)
+        self.cell(200, 10, 'COTIZACIÓN', 0, 1, 'R')
+        
         self.set_font('Arial', '', 10)
-        self.cell(0, 5, 'Soluciones Tecnológicas en Rastreo', 0, 1, 'R')
-        self.ln(15)
+        self.cell(200, 5, 'Soluciones Tecnológicas en Rastreo', 0, 1, 'R')
+        self.ln(20)
 
     def footer(self):
         self.set_y(-35)
@@ -81,9 +98,9 @@ def generar_pdf(cliente, folio, carrito, lleva_iva):
     pdf.set_text_color(200, 0, 0)
     pdf.cell(60, 6, f"Vence: {fecha_vence}", 0, 1, 'R')
     
-    pdf.set_y(70)
+    pdf.set_y(75)
     
-    # TABLA
+    # TABLA DE PRODUCTOS
     pdf.set_fill_color(*COLOR_PRIMARIO)
     pdf.set_text_color(255, 255, 255)
     pdf.set_font('Arial', 'B', 9)
@@ -111,7 +128,7 @@ def generar_pdf(cliente, folio, carrito, lleva_iva):
         pdf.multi_cell(120, 5, item['desc'], 0, 'L', 1)
         pdf.set_xy(x + 120, y)
         
-        # PRECIOS (LOGICA TACHADO)
+        # Lógica de precio tachado
         x_precio = pdf.get_x()
         pdf.rect(x_precio, y, 30, h, 'F')
         
@@ -164,8 +181,18 @@ def generar_pdf(cliente, folio, carrito, lleva_iva):
 
     return pdf.output(dest='S').encode('latin-1')
 
-# --- INTERFAZ WEB (LO QUE VES EN EL CELULAR) ---
+# --- INTERFAZ WEB ---
 def main():
+    
+    # 2. LOGO EN LA WEB (HEADER)
+    # Aquí buscamos el archivo y lo mostramos si existe
+    if os.path.exists("logo.png"):
+        st.image("logo.png", width=150)
+    else:
+        st.warning("⚠️ No encuentro 'logo.png'. Sube el archivo a GitHub.")
+        # CHIVATO: Esto te dirá qué archivos SÍ está viendo el sistema
+        st.caption(f"Archivos encontrados en la carpeta: {os.listdir('.')}")
+
     st.title("Cotizador GPS 🛰️")
     st.markdown("Genera cotizaciones profesionales en segundos.")
 
@@ -177,7 +204,7 @@ def main():
     with col2:
         folio = st.number_input("Folio", value=100)
 
-    # 2. EL CONFIGURADOR DE GPS (Tu herramienta principal)
+    # 2. EL CONFIGURADOR DE GPS
     st.markdown("### 🛰️ GPS + Planes")
     with st.container():
         st.info("Configurador Rápido de Flotillas")
@@ -194,13 +221,11 @@ def main():
         with col_plan:
             tipo_plan = st.radio("Plan de Servicio", ["Anual ($1,800)", "Mensual ($300)"])
 
-    # 3. OTROS PRODUCTOS (Oculto para no estorbar en el cel)
+    # 3. OTROS PRODUCTOS
     with st.expander("📷 Dashcams, Sensores y Accesorios"):
         carrito_extra = []
         for k, v in CATALOGO.items():
-            if k in [1, 2, 3]: continue # Saltamos los GPS y planes porque ya están arriba
-            
-            # Nombre corto
+            if k in [1, 2, 3]: continue
             titulo = v['nombre'].split('\n')[0]
             c = st.number_input(f"{titulo} (${v['precio']})", min_value=0, key=k)
             if c > 0:
@@ -215,22 +240,18 @@ def main():
     if st.button("📄 GENERAR PDF AHORA", type="primary", use_container_width=True):
         carrito = []
         
-        # Lógica GPS
         if cant_gps > 0:
             precio_gps = 1700 if desc_flotilla else 2200
             orig_gps = 2200 if desc_flotilla else None
             nom_gps = CATALOGO[1]['nombre']
             if desc_flotilla: nom_gps += "\n   >> PRECIO ESPECIAL FLOTILLAS (Desc. Aplicado)"
             
-            # Agregamos GPS
             carrito.append({"cant": cant_gps, "desc": nom_gps, "unitario": precio_gps, "total": precio_gps*cant_gps, "original": orig_gps})
             
-            # Agregamos Plan
             id_plan = 3 if "Anual" in tipo_plan else 2
             prod_plan = CATALOGO[id_plan]
             carrito.append({"cant": cant_gps, "desc": prod_plan['nombre'], "unitario": prod_plan['precio'], "total": prod_plan['precio']*cant_gps, "original": None})
 
-        # Lógica Extras
         for extra in carrito_extra:
             carrito.append({"cant": extra['cant'], "desc": extra['item']['nombre'], "unitario": extra['item']['precio'], "total": extra['item']['precio']*extra['cant'], "original": None})
 
@@ -238,14 +259,11 @@ def main():
             carrito.append({"cant": 1, "desc": "SERVICIO A DOMICILIO / VIÁTICOS", "unitario": costo_envio, "total": costo_envio, "original": None})
 
         if not carrito:
-            st.error("⚠️ El carrito está vacío. Agrega al menos 1 GPS o producto.")
+            st.error("⚠️ El carrito está vacío.")
         elif not cliente:
             st.warning("⚠️ Escribe el nombre del cliente.")
         else:
-            # Generar
             pdf_bytes = generar_pdf(cliente, folio, carrito, lleva_iva)
-            
-            # Limpiar nombre para el archivo
             nombre_clean = re.sub(r'[^a-zA-Z0-9]', '', cliente.split()[0])
             nombre_archivo = f"Cotizacion-{nombre_clean}-{folio}.pdf"
             

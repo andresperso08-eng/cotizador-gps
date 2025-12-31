@@ -4,14 +4,15 @@ from datetime import datetime, timedelta
 import re
 import os
 import pandas as pd
+import urllib.parse # <--- NUEVA LIBRERÍA PARA WHATSAPP
 from streamlit_gsheets import GSheetsConnection
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Cotizador GPS", page_icon="🛰️", layout="centered")
 
 # --- ESTILOS VISUALES ---
-COLOR_PRIMARIO = (18, 52, 89)      # Azul Marino
-COLOR_SECUNDARIO = (255, 195, 0)   # Amarillo
+COLOR_PRIMARIO = (18, 52, 89)
+COLOR_SECUNDARIO = (255, 195, 0)
 
 # --- CATÁLOGO MAESTRO ---
 CATALOGO = {
@@ -30,12 +31,10 @@ CATALOGO = {
 # --- CLASE PDF ---
 class PDF(FPDF):
     def header(self):
-        if os.path.exists("logo.png"):
-            self.image("logo.png", 10, 8, 33)
+        if os.path.exists("logo.png"): self.image("logo.png", 10, 8, 33)
         self.set_fill_color(*COLOR_PRIMARIO)
         self.rect(0, 0, 210, 42, 'F')
-        if os.path.exists("logo.png"):
-            self.image("logo.png", 10, 5, 30)
+        if os.path.exists("logo.png"): self.image("logo.png", 10, 5, 30)
         self.set_font('Arial', 'B', 20)
         self.set_text_color(255, 255, 255)
         self.set_xy(0, 8)
@@ -178,37 +177,33 @@ def generar_pdf(cliente, folio, carrito, lleva_iva):
 
 # --- INTERFAZ WEB ---
 def main():
-    if os.path.exists("logo.png"):
-        st.image("logo.png", width=150)
+    if os.path.exists("logo.png"): st.image("logo.png", width=150)
 
     st.title("Cotizador GPS 🛰️")
     st.markdown("Genera cotizaciones profesionales en segundos.")
 
-    # --- LÓGICA DE CONEXIÓN CON AUTO-REFRESCO (TTL=0) ---
     conn = None
     ultimo_folio = 99
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
-        # IMPORTANTE: ttl=0 obliga a leer los datos frescos de Google
-        df_db = conn.read(ttl=0) 
-        
+        df_db = conn.read(ttl=0)
         if not df_db.empty and "Folio" in df_db.columns:
-            # Limpiamos para asegurar que sean números
             folios_existentes = pd.to_numeric(df_db["Folio"], errors='coerce').fillna(0)
-            if not folios_existentes.empty:
-                ultimo_folio = int(folios_existentes.max())
-    except Exception as e:
-        pass
+            if not folios_existentes.empty: ultimo_folio = int(folios_existentes.max())
+    except Exception as e: pass
 
     siguiente_folio = ultimo_folio + 1
 
-    # 1. CLIENTE
+    # 1. CLIENTE (MODIFICADO CON CAMPO DE WHATSAPP)
     st.markdown("### 👤 Datos del Cliente")
-    col1, col2 = st.columns([3, 1])
-    with col1:
+    col_nom, col_fol = st.columns([3, 1])
+    with col_nom:
         cliente = st.text_input("Nombre / Empresa")
-    with col2:
+    with col_fol:
         folio = st.number_input("Folio", value=siguiente_folio)
+    
+    # Campo para WhatsApp
+    tel_cliente = st.text_input("📱 WhatsApp del Cliente (10 dígitos)", placeholder="Ej: 8110754372")
 
     # 2. CONFIGURADOR
     st.markdown("### 🛰️ GPS + Planes")
@@ -237,7 +232,7 @@ def main():
     costo_envio = st.number_input("Costo Viáticos / Domicilio ($)", min_value=0.0, step=50.0)
     lleva_iva = st.checkbox("¿Agregar 16% IVA al final?")
 
-    # --- BOTÓN DE ACCIÓN ---
+    # --- BOTONES DE ACCIÓN (MODIFICADO CON WHATSAPP) ---
     if st.button("💾 REGISTRAR VENTA Y GENERAR PDF", type="primary", use_container_width=True):
         carrito = []
         if cant_gps > 0:
@@ -256,7 +251,6 @@ def main():
         if costo_envio > 0:
             carrito.append({"cant": 1, "desc": "SERVICIO A DOMICILIO / VIÁTICOS", "unitario": costo_envio, "total": costo_envio, "original": None})
 
-        # Calcular total
         total_venta = sum(item['total'] for item in carrito)
         if lleva_iva: total_venta *= 1.16
 
@@ -270,41 +264,53 @@ def main():
             nombre_clean = re.sub(r'[^a-zA-Z0-9]', '', cliente.split()[0])
             nombre_archivo = f"Cotizacion-{nombre_clean}-{folio}.pdf"
             
-            # B. Guardar en Google Sheets (AHORA SIN CACHÉ)
+            # B. Guardar BD
             guardado_exitoso = False
             if conn:
                 try:
-                    with st.spinner("Guardando en la nube..."):
-                        # LEER FRESCO OTRA VEZ ANTES DE GUARDAR
-                        df = conn.read(ttl=0) 
-                        
+                    with st.spinner("Guardando..."):
+                        df = conn.read(ttl=0)
                         nueva_fila = pd.DataFrame([{
                             "Fecha": datetime.now().strftime("%d/%m/%Y"),
                             "Folio": folio,
                             "Cliente": cliente,
-                            "Total": total_venta
+                            "Total": total_venta,
+                            "Telefono": tel_cliente # Guardamos también el cel
                         }])
-                        # Concatenar
                         df_updated = pd.concat([df, nueva_fila], ignore_index=True)
                         conn.update(data=df_updated)
                         guardado_exitoso = True
-                except Exception as e:
-                    st.error(f"Error al guardar: {e}")
+                except Exception as e: st.error(f"Error BD: {e}")
             
-            if guardado_exitoso:
-                st.success(f"✅ ¡Venta Registrada! Folio {folio} guardado.")
-                st.info("💡 Tip: Si el folio no avanza, recarga la página (F5) para ver el siguiente.")
-            elif conn is None:
-                st.warning("⚠️ PDF Generado, pero NO se guardó (Falta configurar conexión).")
+            if guardado_exitoso: st.success(f"✅ Venta Registrada. Folio {folio}.")
 
-            st.download_button(
-                label="📥 DESCARGAR PDF",
-                data=pdf_bytes,
-                file_name=nombre_archivo,
-                mime="application/pdf",
-                type="primary",
-                use_container_width=True
-            )
+            # --- ZONA DE DESCARGA Y WHATSAPP ---
+            col_descarga, col_wa = st.columns(2)
+            
+            with col_descarga:
+                st.download_button(
+                    label="📥 1. DESCARGAR PDF",
+                    data=pdf_bytes,
+                    file_name=nombre_archivo,
+                    mime="application/pdf",
+                    type="primary",
+                    use_container_width=True
+                )
+            
+            with col_wa:
+                if tel_cliente:
+                    # Limpieza del teléfono
+                    tel_clean = re.sub(r'[^0-9]', '', tel_cliente)
+                    if len(tel_clean) == 10: tel_clean = "52" + tel_clean # Agrega Lada MX si faltó
+                    
+                    # Mensaje personalizado
+                    mensaje = f"Hola *{cliente.upper()}*, gusto en saludarte. 👋\n\nTe comparto la cotización solicitada con Folio *#{folio}*.\n\nQuedo pendiente para cualquier duda.\nSaludos!"
+                    mensaje_encoded = urllib.parse.quote(mensaje)
+                    link_wa = f"https://wa.me/{tel_clean}?text={mensaje_encoded}"
+                    
+                    st.link_button("📱 2. ENVIAR POR WA", link_wa, type="secondary", use_container_width=True)
+                else:
+                    st.info("Escribe el teléfono arriba para activar el botón de WA.")
 
 if __name__ == "__main__":
     main()

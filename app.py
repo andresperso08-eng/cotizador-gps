@@ -184,20 +184,20 @@ def main():
     st.title("Cotizador GPS 🛰️")
     st.markdown("Genera cotizaciones profesionales en segundos.")
 
-    # --- LÓGICA DE CONEXIÓN ---
+    # --- LÓGICA DE CONEXIÓN CON AUTO-REFRESCO (TTL=0) ---
     conn = None
     ultimo_folio = 99
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
-        # Intentamos leer la hoja. Si está vacía o falla, se va al except.
-        df_db = conn.read()
+        # IMPORTANTE: ttl=0 obliga a leer los datos frescos de Google
+        df_db = conn.read(ttl=0) 
+        
         if not df_db.empty and "Folio" in df_db.columns:
             # Limpiamos para asegurar que sean números
             folios_existentes = pd.to_numeric(df_db["Folio"], errors='coerce').fillna(0)
             if not folios_existentes.empty:
                 ultimo_folio = int(folios_existentes.max())
     except Exception as e:
-        # Si falla (ej: primera vez antes de configurar secrets), no tronamos la app
         pass
 
     siguiente_folio = ultimo_folio + 1
@@ -208,10 +208,9 @@ def main():
     with col1:
         cliente = st.text_input("Nombre / Empresa")
     with col2:
-        # El folio se sugiere automático, pero puedes editarlo si quieres
         folio = st.number_input("Folio", value=siguiente_folio)
 
-    # 2. EL CONFIGURADOR DE GPS
+    # 2. CONFIGURADOR
     st.markdown("### 🛰️ GPS + Planes")
     with st.container():
         st.info("Configurador Rápido de Flotillas")
@@ -224,7 +223,7 @@ def main():
         with col_plan:
             tipo_plan = st.radio("Plan de Servicio", ["Anual ($1,800)", "Mensual ($300)"])
 
-    # 3. OTROS PRODUCTOS
+    # 3. OTROS
     with st.expander("📷 Dashcams, Sensores y Accesorios"):
         carrito_extra = []
         for k, v in CATALOGO.items():
@@ -257,7 +256,7 @@ def main():
         if costo_envio > 0:
             carrito.append({"cant": 1, "desc": "SERVICIO A DOMICILIO / VIÁTICOS", "unitario": costo_envio, "total": costo_envio, "original": None})
 
-        # Calcular total para la BD
+        # Calcular total
         total_venta = sum(item['total'] for item in carrito)
         if lleva_iva: total_venta *= 1.16
 
@@ -271,29 +270,30 @@ def main():
             nombre_clean = re.sub(r'[^a-zA-Z0-9]', '', cliente.split()[0])
             nombre_archivo = f"Cotizacion-{nombre_clean}-{folio}.pdf"
             
-            # B. Guardar en Google Sheets
+            # B. Guardar en Google Sheets (AHORA SIN CACHÉ)
             guardado_exitoso = False
             if conn:
                 try:
                     with st.spinner("Guardando en la nube..."):
-                        # Leer datos actuales
-                        df = conn.read()
-                        # Crear nueva fila
+                        # LEER FRESCO OTRA VEZ ANTES DE GUARDAR
+                        df = conn.read(ttl=0) 
+                        
                         nueva_fila = pd.DataFrame([{
                             "Fecha": datetime.now().strftime("%d/%m/%Y"),
                             "Folio": folio,
                             "Cliente": cliente,
                             "Total": total_venta
                         }])
-                        # Concatenar y actualizar
+                        # Concatenar
                         df_updated = pd.concat([df, nueva_fila], ignore_index=True)
                         conn.update(data=df_updated)
                         guardado_exitoso = True
                 except Exception as e:
-                    st.error(f"Error al guardar en Google Sheets: {e}")
+                    st.error(f"Error al guardar: {e}")
             
             if guardado_exitoso:
-                st.success(f"✅ ¡Venta Registrada! Folio {folio} guardado en Google Sheets.")
+                st.success(f"✅ ¡Venta Registrada! Folio {folio} guardado.")
+                st.info("💡 Tip: Si el folio no avanza, recarga la página (F5) para ver el siguiente.")
             elif conn is None:
                 st.warning("⚠️ PDF Generado, pero NO se guardó (Falta configurar conexión).")
 

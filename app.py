@@ -26,42 +26,49 @@ CATALOGO = {
     10: {"nombre": "GPS Magnético (Portátil)\n   + Cero Instalación\n   + Inc. 1 año servicio", "precio": 5500, "alias": "GPSMag"}
 }
 
-# --- CLASE PDF (MODIFICADA CON TU DIRECCIÓN) ---
+# --- CLASE PDF ---
 class PDF(FPDF):
     def header(self):
-        # 1. LOGO
+        # 1. LOGO (Capa inferior)
         if os.path.exists("logo.png"):
             self.image("logo.png", 10, 8, 33)
         
         # 2. FRANJA AZUL DE FONDO
         self.set_fill_color(*COLOR_PRIMARIO)
-        self.rect(0, 0, 210, 40, 'F')
+        self.rect(0, 0, 210, 42, 'F')
         
-        # Volver a poner logo encima del azul si es necesario
+        # Volver a poner el logo (Capa superior)
         if os.path.exists("logo.png"):
             self.image("logo.png", 10, 5, 30)
 
-        # 3. TÍTULO Y SUBTÍTULO
-        self.set_xy(0, 8)
+        # 3. TÍTULO
+        # Usamos w=0 para que ocupe todo el ancho hasta el margen derecho
         self.set_font('Arial', 'B', 20)
         self.set_text_color(255, 255, 255)
-        self.cell(200, 10, 'COTIZACIÓN', 0, 1, 'R')
+        self.set_xy(0, 8)
+        self.cell(0, 10, 'COTIZACIÓN', 0, 1, 'R')
         
+        # Subtítulo
         self.set_font('Arial', '', 9)
-        self.cell(200, 4, 'Soluciones Tecnológicas en Rastreo', 0, 1, 'R')
+        self.set_xy(0, 16)
+        self.cell(0, 4, 'Soluciones Tecnológicas en Rastreo', 0, 1, 'R')
 
-        # 4. DATOS DE LA SUCURSAL (Aquí agregué tu dirección)
+        # 4. DIRECCIÓN ALINEADA
         self.set_font('Arial', '', 7)
-        self.set_text_color(220, 220, 220) # Gris clarito para que se vea bien en el azul
+        self.set_text_color(230, 230, 230)
         
-        # Dirección Línea 1
+        # Línea 1
         self.set_xy(0, 23)
-        self.cell(200, 3, 'Benito Juarez 1818, Local 3, Col. Sin nombre', 0, 1, 'R')
-        # Dirección Línea 2
-        self.cell(200, 3, 'Guadalupe N.L, CP. 67188', 0, 1, 'R')
-        # Teléfono
-        self.set_font('Arial', 'B', 8) # Teléfono en Negritas
-        self.cell(200, 4, 'Tel. 811-075-4372', 0, 1, 'R')
+        self.cell(0, 3, 'Benito Juarez 1818, Local 3', 0, 1, 'R')
+        
+        # Línea 2
+        self.set_xy(0, 27)
+        self.cell(0, 3, 'Col. Sin nombre, Guadalupe N.L, CP. 67188', 0, 1, 'R')
+        
+        # Línea 3 (Teléfono en negrita)
+        self.set_xy(0, 31)
+        self.set_font('Arial', 'B', 8)
+        self.cell(0, 3, 'Tel. 811-075-4372', 0, 1, 'R')
         
         self.ln(15)
 
@@ -86,7 +93,7 @@ def generar_pdf(cliente, folio, carrito, lleva_iva):
     fecha_vence = (hoy + timedelta(days=15)).strftime("%d/%m/%Y")
     
     # DATOS CLIENTE
-    pdf.set_y(45)
+    pdf.set_y(50)
     pdf.set_font('Arial', 'B', 10)
     pdf.set_text_color(*COLOR_PRIMARIO)
     pdf.cell(100, 6, "DATOS DEL CLIENTE:", 0, 1)
@@ -94,19 +101,19 @@ def generar_pdf(cliente, folio, carrito, lleva_iva):
     pdf.set_text_color(0, 0, 0)
     pdf.cell(100, 6, cliente.upper(), 0, 0)
 
-    pdf.set_xy(140, 45)
+    pdf.set_xy(140, 50)
     pdf.set_font('Arial', 'B', 10)
     pdf.set_text_color(*COLOR_PRIMARIO)
     pdf.cell(60, 6, f"FOLIO: #{folio}", 0, 1, 'R')
-    pdf.set_xy(140, 51)
+    pdf.set_xy(140, 56)
     pdf.set_text_color(0,0,0)
     pdf.set_font('Arial', '', 10)
     pdf.cell(60, 6, f"Fecha: {fecha_emision}", 0, 1, 'R')
-    pdf.set_xy(140, 57)
+    pdf.set_xy(140, 62)
     pdf.set_text_color(200, 0, 0)
     pdf.cell(60, 6, f"Vence: {fecha_vence}", 0, 1, 'R')
     
-    pdf.set_y(75)
+    pdf.set_y(80)
     
     # TABLA
     pdf.set_fill_color(*COLOR_PRIMARIO)

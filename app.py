@@ -2,7 +2,7 @@ import streamlit as st
 from fpdf import FPDF
 from datetime import datetime, timedelta
 import re
-import os  # <--- IMPORTANTE: Necesario para buscar el logo
+import os
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Cotizador GPS", page_icon="🛰️", layout="centered")
@@ -26,36 +26,44 @@ CATALOGO = {
     10: {"nombre": "GPS Magnético (Portátil)\n   + Cero Instalación\n   + Inc. 1 año servicio", "precio": 5500, "alias": "GPSMag"}
 }
 
-# --- CLASE PDF ---
+# --- CLASE PDF (MODIFICADA CON TU DIRECCIÓN) ---
 class PDF(FPDF):
     def header(self):
-        # 1. LOGO EN EL PDF
-        # Verifica si el archivo existe antes de ponerlo
+        # 1. LOGO
         if os.path.exists("logo.png"):
-            # x=10, y=8, w=33 (ancho)
             self.image("logo.png", 10, 8, 33)
         
-        # Franja Azul
+        # 2. FRANJA AZUL DE FONDO
         self.set_fill_color(*COLOR_PRIMARIO)
-        # Ajustamos la posición para que no tape el logo si es muy grande
-        self.set_xy(0, 0)
-        # Dibujamos un rectángulo que empieza DESPUÉS del logo visualmente si quieres, 
-        # o mantenemos el diseño original de cabecera completa:
         self.rect(0, 0, 210, 40, 'F')
         
-        # Volvemos a poner el logo ENCIMA del rectángulo azul (para que se vea)
+        # Volver a poner logo encima del azul si es necesario
         if os.path.exists("logo.png"):
-            self.image("logo.png", 10, 5, 30) # Ajusta tamaño y posición aquí
+            self.image("logo.png", 10, 5, 30)
 
-        # Título
+        # 3. TÍTULO Y SUBTÍTULO
+        self.set_xy(0, 8)
         self.set_font('Arial', 'B', 20)
         self.set_text_color(255, 255, 255)
-        self.set_xy(0, 10)
         self.cell(200, 10, 'COTIZACIÓN', 0, 1, 'R')
         
-        self.set_font('Arial', '', 10)
-        self.cell(200, 5, 'Soluciones Tecnológicas en Rastreo', 0, 1, 'R')
-        self.ln(20)
+        self.set_font('Arial', '', 9)
+        self.cell(200, 4, 'Soluciones Tecnológicas en Rastreo', 0, 1, 'R')
+
+        # 4. DATOS DE LA SUCURSAL (Aquí agregué tu dirección)
+        self.set_font('Arial', '', 7)
+        self.set_text_color(220, 220, 220) # Gris clarito para que se vea bien en el azul
+        
+        # Dirección Línea 1
+        self.set_xy(0, 23)
+        self.cell(200, 3, 'Benito Juarez 1818, Local 3, Col. Sin nombre', 0, 1, 'R')
+        # Dirección Línea 2
+        self.cell(200, 3, 'Guadalupe N.L, CP. 67188', 0, 1, 'R')
+        # Teléfono
+        self.set_font('Arial', 'B', 8) # Teléfono en Negritas
+        self.cell(200, 4, 'Tel. 811-075-4372', 0, 1, 'R')
+        
+        self.ln(15)
 
     def footer(self):
         self.set_y(-35)
@@ -100,7 +108,7 @@ def generar_pdf(cliente, folio, carrito, lleva_iva):
     
     pdf.set_y(75)
     
-    # TABLA DE PRODUCTOS
+    # TABLA
     pdf.set_fill_color(*COLOR_PRIMARIO)
     pdf.set_text_color(255, 255, 255)
     pdf.set_font('Arial', 'B', 9)
@@ -128,7 +136,7 @@ def generar_pdf(cliente, folio, carrito, lleva_iva):
         pdf.multi_cell(120, 5, item['desc'], 0, 'L', 1)
         pdf.set_xy(x + 120, y)
         
-        # Lógica de precio tachado
+        # PRECIOS
         x_precio = pdf.get_x()
         pdf.rect(x_precio, y, 30, h, 'F')
         
@@ -183,15 +191,11 @@ def generar_pdf(cliente, folio, carrito, lleva_iva):
 
 # --- INTERFAZ WEB ---
 def main():
-    
-    # 2. LOGO EN LA WEB (HEADER)
-    # Aquí buscamos el archivo y lo mostramos si existe
     if os.path.exists("logo.png"):
         st.image("logo.png", width=150)
     else:
         st.warning("⚠️ No encuentro 'logo.png'. Sube el archivo a GitHub.")
-        # CHIVATO: Esto te dirá qué archivos SÍ está viendo el sistema
-        st.caption(f"Archivos encontrados en la carpeta: {os.listdir('.')}")
+        st.caption(f"Archivos encontrados: {os.listdir('.')}")
 
     st.title("Cotizador GPS 🛰️")
     st.markdown("Genera cotizaciones profesionales en segundos.")

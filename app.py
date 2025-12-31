@@ -3,6 +3,8 @@ from fpdf import FPDF
 from datetime import datetime, timedelta
 import re
 import os
+import pandas as pd
+from streamlit_gsheets import GSheetsConnection
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Cotizador GPS", page_icon="🛰️", layout="centered")
@@ -10,9 +12,8 @@ st.set_page_config(page_title="Cotizador GPS", page_icon="🛰️", layout="cent
 # --- ESTILOS VISUALES ---
 COLOR_PRIMARIO = (18, 52, 89)      # Azul Marino
 COLOR_SECUNDARIO = (255, 195, 0)   # Amarillo
-COLOR_GRIS_CLARO = (245, 245, 245)
 
-# --- TU CATÁLOGO MAESTRO ---
+# --- CATÁLOGO MAESTRO ---
 CATALOGO = {
     1: {"nombre": "GPS RASTREADOR 4G PRO\n   + Instalación Oculta y Profesional\n   + Bloqueo de Motor a Distancia\n   + Batería de Respaldo Interna\n   + Conectividad Híbrida 4G-2G", "precio": 2200, "alias": "GPS"},
     2: {"nombre": "PLAN MENSUAL DE SERVICIO\n   + Plataforma Web y App (Android/iOS)\n   + Ubicación en Tiempo Real (30s)\n   + Historial de Rutas (3 Meses)\n   + Alertas de Seguridad", "precio": 300, "alias": "SvcMes"},
@@ -29,46 +30,28 @@ CATALOGO = {
 # --- CLASE PDF ---
 class PDF(FPDF):
     def header(self):
-        # 1. LOGO (Capa inferior)
         if os.path.exists("logo.png"):
             self.image("logo.png", 10, 8, 33)
-        
-        # 2. FRANJA AZUL DE FONDO
         self.set_fill_color(*COLOR_PRIMARIO)
         self.rect(0, 0, 210, 42, 'F')
-        
-        # Volver a poner el logo (Capa superior)
         if os.path.exists("logo.png"):
             self.image("logo.png", 10, 5, 30)
-
-        # 3. TÍTULO
         self.set_font('Arial', 'B', 20)
         self.set_text_color(255, 255, 255)
         self.set_xy(0, 8)
         self.cell(0, 10, 'COTIZACIÓN', 0, 1, 'R')
-        
-        # Subtítulo
         self.set_font('Arial', '', 9)
         self.set_xy(0, 16)
         self.cell(0, 4, 'Soluciones Tecnológicas en Rastreo', 0, 1, 'R')
-
-        # 4. DIRECCIÓN ALINEADA
         self.set_font('Arial', '', 7)
         self.set_text_color(230, 230, 230)
-        
-        # Línea 1
         self.set_xy(0, 23)
         self.cell(0, 3, 'Benito Juarez 1818, Local 3', 0, 1, 'R')
-        
-        # Línea 2
         self.set_xy(0, 27)
         self.cell(0, 3, 'Col. Sin nombre, Guadalupe N.L, CP. 67188', 0, 1, 'R')
-        
-        # Línea 3 (Teléfono en negrita)
         self.set_xy(0, 31)
         self.set_font('Arial', 'B', 8)
         self.cell(0, 3, 'Tel. 811-075-4372', 0, 1, 'R')
-        
         self.ln(15)
 
     def footer(self):
@@ -86,12 +69,10 @@ def generar_pdf(cliente, folio, carrito, lleva_iva):
     pdf = PDF()
     pdf.alias_nb_pages()
     pdf.add_page()
-    
     hoy = datetime.now()
     fecha_emision = hoy.strftime("%d/%m/%Y")
     fecha_vence = (hoy + timedelta(days=15)).strftime("%d/%m/%Y")
     
-    # DATOS CLIENTE
     pdf.set_y(50)
     pdf.set_font('Arial', 'B', 10)
     pdf.set_text_color(*COLOR_PRIMARIO)
@@ -99,7 +80,6 @@ def generar_pdf(cliente, folio, carrito, lleva_iva):
     pdf.set_font('Arial', '', 10)
     pdf.set_text_color(0, 0, 0)
     pdf.cell(100, 6, cliente.upper(), 0, 0)
-
     pdf.set_xy(140, 50)
     pdf.set_font('Arial', 'B', 10)
     pdf.set_text_color(*COLOR_PRIMARIO)
@@ -111,10 +91,8 @@ def generar_pdf(cliente, folio, carrito, lleva_iva):
     pdf.set_xy(140, 62)
     pdf.set_text_color(200, 0, 0)
     pdf.cell(60, 6, f"Vence: {fecha_vence}", 0, 1, 'R')
-    
     pdf.set_y(80)
     
-    # TABLA
     pdf.set_fill_color(*COLOR_PRIMARIO)
     pdf.set_text_color(255, 255, 255)
     pdf.set_font('Arial', 'B', 9)
@@ -122,40 +100,30 @@ def generar_pdf(cliente, folio, carrito, lleva_iva):
     pdf.cell(120, 8, 'DESCRIPCIÓN', 0, 0, 'L', 1)
     pdf.cell(30, 8, 'P. UNIT.', 0, 0, 'R', 1)
     pdf.cell(30, 8, 'IMPORTE', 0, 1, 'R', 1)
-
     pdf.set_text_color(0, 0, 0)
     pdf.set_font('Arial', '', 8)
     
     gran_total = 0
     fill = False
-    
     for item in carrito:
         lineas = item['desc'].count('\n') + 1
         h = max(lineas * 5, 10)
-        
         if fill: pdf.set_fill_color(245, 245, 245)
         else: pdf.set_fill_color(255, 255, 255)
-        
         pdf.cell(15, h, str(item['cant']), 0, 0, 'C', 1)
-        
         x, y = pdf.get_x(), pdf.get_y()
         pdf.multi_cell(120, 5, item['desc'], 0, 'L', 1)
         pdf.set_xy(x + 120, y)
-        
-        # PRECIOS
         x_precio = pdf.get_x()
         pdf.rect(x_precio, y, 30, h, 'F')
-        
         if item.get('original') and item['original'] > item['unitario']:
             pdf.set_font('Arial', '', 7)
             pdf.set_text_color(150, 150, 150)
             pdf.set_xy(x_precio, y+2)
             pdf.cell(30, 4, f"${item['original']:,.2f}", 0, 0, 'R')
-            
             ancho = pdf.get_string_width(f"${item['original']:,.2f}")
             pdf.set_draw_color(150, 50, 50)
             pdf.line(x_precio+30-1-ancho, y+4, x_precio+29, y+4)
-            
             pdf.set_xy(x_precio, y+6)
             pdf.set_font('Arial', 'B', 8)
             pdf.set_text_color(0,0,0)
@@ -164,19 +132,15 @@ def generar_pdf(cliente, folio, carrito, lleva_iva):
         else:
             pdf.set_text_color(0,0,0)
             pdf.cell(30, h, f"${item['unitario']:,.2f}", 0, 0, 'R')
-
         pdf.cell(30, h, f"${item['total']:,.2f}", 0, 1, 'R', 1)
         gran_total += item['total']
         fill = not fill
 
-    # TOTALES
     pdf.set_draw_color(*COLOR_PRIMARIO)
     pdf.line(10, pdf.get_y(), 200, pdf.get_y())
     pdf.ln(5)
-    
     iva = gran_total * 0.16 if lleva_iva else 0
     total = gran_total + iva
-    
     x_start = 130
     if lleva_iva:
         pdf.set_x(x_start)
@@ -185,15 +149,12 @@ def generar_pdf(cliente, folio, carrito, lleva_iva):
         pdf.set_x(x_start)
         pdf.cell(35, 6, "IVA (16%):", 0, 0, 'R')
         pdf.cell(30, 6, f"${iva:,.2f}", 0, 1, 'R')
-
     pdf.ln(2)
     pdf.set_x(x_start)
     pdf.set_fill_color(*COLOR_SECUNDARIO)
     pdf.set_font('Arial', 'B', 12)
     pdf.cell(35, 10, "TOTAL NETO:", 1, 0, 'R', 1)
     pdf.cell(30, 10, f"${total:,.2f}", 1, 1, 'R', 1)
-    
-    # LEYENDA DEL IVA (SOLO SI NO LLEVA IVA)
     if not lleva_iva:
         pdf.ln(2)
         pdf.set_x(x_start - 20)
@@ -201,14 +162,10 @@ def generar_pdf(cliente, folio, carrito, lleva_iva):
         pdf.set_text_color(200, 0, 0)
         pdf.cell(85, 5, "* Precios más IVA en caso de requerir factura.", 0, 1, 'R')
 
-    # --- SECCIÓN: DATOS BANCARIOS (ACTUALIZADA) ---
     pdf.ln(15)
-    
-    # Ahora ocupamos todo el ancho porque quitamos la firma
     pdf.set_font('Arial', 'B', 9)
     pdf.set_text_color(*COLOR_PRIMARIO)
     pdf.cell(0, 5, "DATOS BANCARIOS PARA DEPÓSITO / TRANSFERENCIA:", 0, 1)
-    
     pdf.set_font('Arial', '', 8)
     pdf.set_text_color(50, 50, 50)
     pdf.ln(2)
@@ -217,19 +174,33 @@ def generar_pdf(cliente, folio, carrito, lleva_iva):
     pdf.cell(0, 4, "Tarjeta Débito: 5204 1660 0460 5095", 0, 1)
     pdf.cell(0, 4, "CLABE Interbancaria: 002580700958459576", 0, 1)
     pdf.cell(0, 4, "Concepto de pago: Favor de incluir su NÚMERO DE FOLIO", 0, 1)
-
     return pdf.output(dest='S').encode('latin-1')
 
 # --- INTERFAZ WEB ---
 def main():
     if os.path.exists("logo.png"):
         st.image("logo.png", width=150)
-    else:
-        st.warning("⚠️ No encuentro 'logo.png'. Sube el archivo a GitHub.")
-        st.caption(f"Archivos encontrados: {os.listdir('.')}")
 
     st.title("Cotizador GPS 🛰️")
     st.markdown("Genera cotizaciones profesionales en segundos.")
+
+    # --- LÓGICA DE CONEXIÓN ---
+    conn = None
+    ultimo_folio = 99
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        # Intentamos leer la hoja. Si está vacía o falla, se va al except.
+        df_db = conn.read()
+        if not df_db.empty and "Folio" in df_db.columns:
+            # Limpiamos para asegurar que sean números
+            folios_existentes = pd.to_numeric(df_db["Folio"], errors='coerce').fillna(0)
+            if not folios_existentes.empty:
+                ultimo_folio = int(folios_existentes.max())
+    except Exception as e:
+        # Si falla (ej: primera vez antes de configurar secrets), no tronamos la app
+        pass
+
+    siguiente_folio = ultimo_folio + 1
 
     # 1. CLIENTE
     st.markdown("### 👤 Datos del Cliente")
@@ -237,22 +208,19 @@ def main():
     with col1:
         cliente = st.text_input("Nombre / Empresa")
     with col2:
-        folio = st.number_input("Folio", value=100)
+        # El folio se sugiere automático, pero puedes editarlo si quieres
+        folio = st.number_input("Folio", value=siguiente_folio)
 
     # 2. EL CONFIGURADOR DE GPS
     st.markdown("### 🛰️ GPS + Planes")
     with st.container():
         st.info("Configurador Rápido de Flotillas")
         col_cant, col_plan = st.columns(2)
-        
         with col_cant:
             cant_gps = st.number_input("Cantidad de GPS", min_value=0, value=0)
             desc_flotilla = st.toggle("¿Aplicar Descuento Flotilla?", value=False)
-            if desc_flotilla:
-                st.caption("✅ Precio baja a $1,700")
-            else:
-                st.caption("Precio normal: $2,200")
-        
+            if desc_flotilla: st.caption("✅ Precio baja a $1,700")
+            else: st.caption("Precio normal: $2,200")
         with col_plan:
             tipo_plan = st.radio("Plan de Servicio", ["Anual ($1,800)", "Mensual ($300)"])
 
@@ -263,26 +231,22 @@ def main():
             if k in [1, 2, 3]: continue
             titulo = v['nombre'].split('\n')[0]
             c = st.number_input(f"{titulo} (${v['precio']})", min_value=0, key=k)
-            if c > 0:
-                carrito_extra.append({"cant": c, "item": v})
+            if c > 0: carrito_extra.append({"cant": c, "item": v})
 
     # 4. EXTRAS
     st.markdown("### 🚚 Extras")
     costo_envio = st.number_input("Costo Viáticos / Domicilio ($)", min_value=0.0, step=50.0)
     lleva_iva = st.checkbox("¿Agregar 16% IVA al final?")
 
-    # --- BOTÓN MÁGICO ---
-    if st.button("📄 GENERAR PDF AHORA", type="primary", use_container_width=True):
+    # --- BOTÓN DE ACCIÓN ---
+    if st.button("💾 REGISTRAR VENTA Y GENERAR PDF", type="primary", use_container_width=True):
         carrito = []
-        
         if cant_gps > 0:
             precio_gps = 1700 if desc_flotilla else 2200
             orig_gps = 2200 if desc_flotilla else None
             nom_gps = CATALOGO[1]['nombre']
             if desc_flotilla: nom_gps += "\n   >> PRECIO ESPECIAL FLOTILLAS (Desc. Aplicado)"
-            
             carrito.append({"cant": cant_gps, "desc": nom_gps, "unitario": precio_gps, "total": precio_gps*cant_gps, "original": orig_gps})
-            
             id_plan = 3 if "Anual" in tipo_plan else 2
             prod_plan = CATALOGO[id_plan]
             carrito.append({"cant": cant_gps, "desc": prod_plan['nombre'], "unitario": prod_plan['precio'], "total": prod_plan['precio']*cant_gps, "original": None})
@@ -293,16 +257,46 @@ def main():
         if costo_envio > 0:
             carrito.append({"cant": 1, "desc": "SERVICIO A DOMICILIO / VIÁTICOS", "unitario": costo_envio, "total": costo_envio, "original": None})
 
+        # Calcular total para la BD
+        total_venta = sum(item['total'] for item in carrito)
+        if lleva_iva: total_venta *= 1.16
+
         if not carrito:
             st.error("⚠️ El carrito está vacío.")
         elif not cliente:
             st.warning("⚠️ Escribe el nombre del cliente.")
         else:
+            # A. Generar PDF
             pdf_bytes = generar_pdf(cliente, folio, carrito, lleva_iva)
             nombre_clean = re.sub(r'[^a-zA-Z0-9]', '', cliente.split()[0])
             nombre_archivo = f"Cotizacion-{nombre_clean}-{folio}.pdf"
             
-            st.success("✅ ¡Cotización Creada!")
+            # B. Guardar en Google Sheets
+            guardado_exitoso = False
+            if conn:
+                try:
+                    with st.spinner("Guardando en la nube..."):
+                        # Leer datos actuales
+                        df = conn.read()
+                        # Crear nueva fila
+                        nueva_fila = pd.DataFrame([{
+                            "Fecha": datetime.now().strftime("%d/%m/%Y"),
+                            "Folio": folio,
+                            "Cliente": cliente,
+                            "Total": total_venta
+                        }])
+                        # Concatenar y actualizar
+                        df_updated = pd.concat([df, nueva_fila], ignore_index=True)
+                        conn.update(data=df_updated)
+                        guardado_exitoso = True
+                except Exception as e:
+                    st.error(f"Error al guardar en Google Sheets: {e}")
+            
+            if guardado_exitoso:
+                st.success(f"✅ ¡Venta Registrada! Folio {folio} guardado en Google Sheets.")
+            elif conn is None:
+                st.warning("⚠️ PDF Generado, pero NO se guardó (Falta configurar conexión).")
+
             st.download_button(
                 label="📥 DESCARGAR PDF",
                 data=pdf_bytes,

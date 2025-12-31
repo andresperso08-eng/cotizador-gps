@@ -255,17 +255,45 @@ def main():
                 c = st.number_input(f"{titulo} (${v['precio']})", min_value=0, key=k)
                 if c > 0: carrito_extra.append({"cant": c, "item": v})
 
-    # --- SECCIÓN EXTRA PERSONALIZADA (SOLO EN MODO MANUAL) ---
-    custom_item = None
+    # --- SECCIÓN EXTRA DE FILAS MÚLTIPLES (SOLO EN MODO MANUAL) ---
+    custom_items_list = []
     if modo_manual:
-        st.markdown("### ✍️ Concepto 100% Personalizado")
-        with st.container(border=True):
-            c_desc = st.text_input("Descripción del Servicio Extra", placeholder="Ej: Mano de obra especial...")
-            c_col1, c_col2 = st.columns(2)
-            c_precio = c_col1.number_input("Precio Unitario", value=0.0)
-            c_cant = c_col2.number_input("Cantidad", value=0, min_value=0)
-            if c_desc and c_cant > 0:
-                custom_item = {"cant": c_cant, "desc": c_desc, "unitario": c_precio, "total": c_precio * c_cant}
+        st.markdown("### ✍️ Conceptos Personalizados (Varios)")
+        st.caption("Agrega filas para conceptos extra (Mano de obra, viáticos extra, etc.)")
+        
+        # Estructura inicial de la tabla
+        df_base_custom = pd.DataFrame([
+            {"Descripción": "", "Cantidad": 1, "Precio Unitario": 0.0}
+        ])
+
+        # Editor de datos (Tabla tipo Excel)
+        edited_df = st.data_editor(
+            df_base_custom,
+            num_rows="dynamic", # Permite agregar filas infinitas
+            column_config={
+                "Descripción": st.column_config.TextColumn("Descripción", width="large", required=True),
+                "Cantidad": st.column_config.NumberColumn("Cantidad", min_value=1, step=1),
+                "Precio Unitario": st.column_config.NumberColumn("Precio Unitario ($)", format="$%d")
+            },
+            use_container_width=True,
+            key="editor_custom"
+        )
+        
+        # Procesamos lo que el usuario escribió en la tabla
+        for index, row in edited_df.iterrows():
+            desc = row.get("Descripción")
+            cant = row.get("Cantidad")
+            pu = row.get("Precio Unitario")
+            
+            if desc and cant > 0: # Solo agregamos si escribió algo
+                custom_items_list.append({
+                    "cant": int(cant),
+                    "desc": desc,
+                    "unitario": float(pu),
+                    "total": float(pu) * int(cant),
+                    "original": None
+                })
+
 
     # 4. EXTRAS
     st.markdown("### 🚚 Extras")
@@ -278,10 +306,9 @@ def main():
         
         # LOGICA GPS
         if cant_gps > 0:
-            # Definimos precio según el modo
             if modo_manual:
                 precio_gps = precio_gps_manual
-                orig_gps = None # No tachamos precio en manual
+                orig_gps = None
                 nom_gps = CATALOGO[1]['nombre']
             else:
                 precio_gps = 1700 if desc_flotilla else 2200
@@ -291,7 +318,6 @@ def main():
             
             carrito.append({"cant": cant_gps, "desc": nom_gps, "unitario": precio_gps, "total": precio_gps*cant_gps, "original": orig_gps})
             
-            # Definimos precio plan
             id_plan = 3 if "Anual" in tipo_plan else 2
             prod_plan = CATALOGO[id_plan]
             
@@ -302,13 +328,14 @@ def main():
                 
             carrito.append({"cant": cant_gps, "desc": prod_plan['nombre'], "unitario": precio_plan, "total": precio_plan*cant_gps, "original": None})
 
-        # LOGICA EXTRAS (Ya vienen procesados arriba)
+        # LOGICA EXTRAS
         for extra in carrito_extra:
             carrito.append({"cant": extra['cant'], "desc": extra['item']['nombre'], "unitario": extra['item']['precio'], "total": extra['item']['precio']*extra['cant'], "original": None})
 
-        # LOGICA CUSTOM ITEM (MANUAL)
-        if custom_item:
-            carrito.append(custom_item)
+        # LOGICA CUSTOM ITEMS (TABLA DINAMICA)
+        if custom_items_list:
+            for item_c in custom_items_list:
+                carrito.append(item_c)
 
         # LOGICA VIATICOS
         if costo_envio > 0:

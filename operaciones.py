@@ -10,7 +10,13 @@ import os
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Sistema de Operaciones GPS", layout="wide", page_icon="🛠️")
-conn = st.connection("gsheets", type=GSheetsConnection)
+
+# Intentamos conectar mostrando el error si falla
+try:
+    conn = st.connection("gsheets", type=GSheetsConnection)
+except Exception as e:
+    st.error(f"🚨 Error crítico de configuración en secrets.toml: {e}")
+    st.stop()
 
 # --- CLASE PDF PARA EVIDENCIA ---
 class PDFReporte(FPDF):
@@ -43,27 +49,34 @@ def generar_pdf_evidencia(datos, fotos):
     
     for nombre_foto, ruta in fotos.items():
         if ruta:
-            pdf.set_font('Arial', 'B', 10) # Nombre de la foto en negrita
+            pdf.set_font('Arial', 'B', 10) 
             pdf.set_xy(x, y)
             pdf.cell(90, 5, nombre_foto, 0, 1)
             try:
-                # Ajustamos la imagen
                 pdf.image(ruta, x=x, y=y+6, w=85, h=60)
             except: pass
             
-            # Mover cursor (Lógica de 2 columnas)
             if x == x_start:
                 x = 110 
             else:
                 x = x_start
-                y += 75 # Bajar a siguiente fila
+                y += 75 
                 
-            if y > 240: # Si se acaba la hoja
+            if y > 240:
                 pdf.add_page()
                 y = 20
                 x = x_start
 
     return pdf.output(dest='S').encode('latin-1')
+
+# --- FUNCIÓN AUXILIAR PARA LEER DATOS SIN TRONAR ---
+def cargar_datos(hoja):
+    try:
+        df = conn.read(worksheet=hoja, ttl=0)
+        return df
+    except Exception as e:
+        # Si falla, regresamos un error explicito
+        return None, str(e)
 
 # --- VISTA 1: ADMINISTRADOR (TÚ) ---
 def vista_admin():
@@ -85,13 +98,13 @@ def vista_admin():
         
         if st.form_submit_button("💾 Guardar y Asignar"):
             try:
-                # Leemos la hoja (si no existe, Pandas creará un DF vacío)
+                # 1. Intentamos leer, si falla o está vacío, creamos el DF desde cero
                 try:
                     df = conn.read(worksheet="Agenda_Servicios", ttl=0)
                 except:
                     df = pd.DataFrame(columns=["ID", "Fecha_Prog", "Hora_Prog", "Cliente", "Telefono", "Ubicacion", "Vehiculos_Desc", "Notas", "Estatus", "Cobro_Final"])
 
-                id_serv = str(uuid.uuid4())[:6].upper() # ID Corto
+                id_serv = str(uuid.uuid4())[:6].upper()
                 
                 nuevo = pd.DataFrame([{
                     "ID": id_serv,
@@ -106,35 +119,49 @@ def vista_admin():
                     "Cobro_Final": 0
                 }])
                 
-                df_new = pd.concat([df, nuevo], ignore_index=True)
-                conn.update(worksheet="Agenda_Servicios", data=df_new)
+                # Si el df original estaba vacío, usamos solo el nuevo
+                if df.empty:
+                    df_final = nuevo
+                else:
+                    df_final = pd.concat([df, nuevo], ignore_index=True)
+                
+                conn.update(worksheet="Agenda_Servicios", data=df_final)
                 st.success(f"✅ Servicio agendado con ID: {id_serv}")
+            
             except Exception as e:
-                st.error(f"Error al conectar con Google Sheets: {e}")
+                st.error(f"🛑 ERROR AL GUARDAR EN SHEETS: {e}")
+                st.info("Revisa que hayas compartido el Excel con el correo del Service Account y que tenga permiso de EDITOR.")
 
     st.divider()
     st.markdown("### 📋 Tablero de Pendientes")
     try:
         df_ver = conn.read(worksheet="Agenda_Servicios", ttl=0)
-        pendientes = df_ver[df_ver["Estatus"] == "PENDIENTE"]
-        if not pendientes.empty:
-            st.dataframe(pendientes[["Fecha_Prog", "Hora_Prog", "Cliente", "Vehiculos_Desc", "Ubicacion"]])
+        # Filtramos errores comunes de columnas vacias
+        if not df_ver.empty and "Estatus" in df_ver.columns:
+            pendientes = df_ver[df_ver["Estatus"] == "PENDIENTE"]
+            if not pendientes.empty:
+                st.dataframe(pendientes[["Fecha_Prog", "Hora_Prog", "Cliente", "Vehiculos_Desc", "Ubicacion"]])
+            else:
+                st.info("No hay servicios pendientes.")
         else:
-            st.info("No hay servicios pendientes.")
-    except:
-        pass
+            st.warning("La hoja 'Agenda_Servicios' está vacía o no tiene las columnas correctas.")
+    except Exception as e:
+        st.error(f"No se pudo leer la hoja 'Agenda_Servicios': {e}")
 
 # --- VISTA 2: TÉCNICO (CAMPO) ---
 def vista_tecnico():
     st.title("🔧 App Técnico")
     st.markdown("Selecciona un servicio para trabajar:")
 
-    # 1. Cargar Agenda
+    # 1. Cargar Agenda con Debug
     try:
         df_agenda = conn.read(worksheet="Agenda_Servicios", ttl=0)
+        if "Estatus" not in df_agenda.columns:
+             st.error("⚠️ La hoja 'Agenda_Servicios' no tiene la columna 'Estatus'.")
+             return
         mis_servicios = df_agenda[df_agenda["Estatus"] == "PENDIENTE"]
-    except:
-        st.error("Error conectando a la base de datos.")
+    except Exception as e:
+        st.error(f"🛑 ERROR CONECTANDO A BD: {e}")
         return
 
     if mis_servicios.empty:
@@ -142,13 +169,17 @@ def vista_tecnico():
         return
 
     # 2. Selector Inteligente
-    lista_opciones = mis_servicios.apply(lambda x: f"{x['Fecha_Prog']} {x['Hora_Prog']} - {x['Cliente']}", axis=1)
-    seleccion = st.selectbox("📍 Órdenes de Trabajo:", lista_opciones)
-    
-    # Recuperar datos del servicio seleccionado
-    index_serv = lista_opciones[lista_opciones == seleccion].index[0]
-    orden = mis_servicios.loc[index_serv]
-    id_orden = orden['ID']
+    try:
+        lista_opciones = mis_servicios.apply(lambda x: f"{x['Fecha_Prog']} {x['Hora_Prog']} - {x['Cliente']}", axis=1)
+        seleccion = st.selectbox("📍 Órdenes de Trabajo:", lista_opciones)
+        
+        # Recuperar datos del servicio seleccionado
+        index_serv = lista_opciones[lista_opciones == seleccion].index[0]
+        orden = mis_servicios.loc[index_serv]
+        id_orden = orden['ID']
+    except Exception as e:
+        st.error(f"Error procesando los datos: {e}")
+        return
 
     # 3. Mostrar Detalles
     with st.container():
@@ -186,7 +217,6 @@ def vista_tecnico():
             if not nombre_unidad:
                 st.warning("⚠️ Falta el nombre de la unidad.")
             else:
-                # Procesar fotos
                 fotos = {"CHIP": None, "GPS": None, "CARRO": None, "PLACAS": None, "TABLERO": None}
                 
                 def guardar_temp(upload_file):
@@ -214,37 +244,44 @@ def vista_tecnico():
                 
                 pdf_bytes = generar_pdf_evidencia(datos_pdf, fotos)
                 
-                # Guardar en Sheet "Instalaciones" (Bitácora Histórica)
+                # Guardar en Sheet "Instalaciones"
                 try:
-                    df_hist = conn.read(worksheet="Instalaciones", ttl=0)
-                except:
-                    df_hist = pd.DataFrame()
-                
-                nuevo_reg = pd.DataFrame([{
-                    "ID_Servicio": id_orden,
-                    "Fecha": datetime.now().strftime("%d/%m/%Y"),
-                    "Cliente": orden['Cliente'],
-                    "Unidad": nombre_unidad,
-                    "Evidencia": "PDF Generado"
-                }])
-                conn.update(worksheet="Instalaciones", data=pd.concat([df_hist, nuevo_reg], ignore_index=True))
-                
-                st.success(f"✅ Unidad '{nombre_unidad}' guardada correctamente.")
-                st.download_button("📥 Descargar PDF Evidencia", pdf_bytes, f"Evidencia_{nombre_unidad}.pdf", "application/pdf")
+                    try:
+                        df_hist = conn.read(worksheet="Instalaciones", ttl=0)
+                    except:
+                        df_hist = pd.DataFrame(columns=["ID_Servicio", "Fecha", "Cliente", "Unidad", "Evidencia"])
+                    
+                    nuevo_reg = pd.DataFrame([{
+                        "ID_Servicio": id_orden,
+                        "Fecha": datetime.now().strftime("%d/%m/%Y"),
+                        "Cliente": orden['Cliente'],
+                        "Unidad": nombre_unidad,
+                        "Evidencia": "PDF Generado"
+                    }])
+                    
+                    if df_hist.empty:
+                        df_final_hist = nuevo_reg
+                    else:
+                        df_final_hist = pd.concat([df_hist, nuevo_reg], ignore_index=True)
+
+                    conn.update(worksheet="Instalaciones", data=df_final_hist)
+                    
+                    st.success(f"✅ Unidad '{nombre_unidad}' guardada correctamente.")
+                    st.download_button("📥 Descargar PDF Evidencia", pdf_bytes, f"Evidencia_{nombre_unidad}.pdf", "application/pdf")
+                    
+                except Exception as e:
+                    st.error(f"Error guardando en bitácora: {e}")
 
     st.divider()
 
-    # 5. Cierre de Orden (Cobranza)
+    # 5. Cierre de Orden
     st.markdown("### 💰 Finalizar Servicio")
     with st.expander("Clic aquí cuando acabes TODOS los carros", expanded=False):
-        st.write("Solo llena esto si ya terminaste todo el trabajo con este cliente.")
-        
         tipo_pago = st.selectbox("Forma de Pago", ["Efectivo", "Transferencia", "Pendiente / Crédito"])
         monto_cobrado = st.number_input("Monto Recibido ($)", min_value=0.0, step=50.0)
         
         if st.button("🔒 CERRAR ORDEN DEFINITIVAMENTE"):
             try:
-                # Actualizar estatus a FINALIZADO
                 df_agenda.loc[index_serv, "Estatus"] = "FINALIZADO"
                 df_agenda.loc[index_serv, "Cobro_Final"] = monto_cobrado
                 conn.update(worksheet="Agenda_Servicios", data=df_agenda)

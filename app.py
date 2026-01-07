@@ -15,6 +15,7 @@ COLOR_PRIMARIO = (18, 52, 89)
 COLOR_SECUNDARIO = (255, 195, 0)
 
 # --- CATÁLOGO MAESTRO ---
+# AQUI SE AGREGÓ EL PRODUCTO 11 (RENOVACIÓN)
 CATALOGO = {
     1: {"nombre": "GPS RASTREADOR 4G PRO\n   + Instalación Oculta y Profesional\n   + Bloqueo de Motor a Distancia\n   + Batería de Respaldo Interna\n   + Conectividad Híbrida 4G-2G", "precio": 2200, "alias": "GPS"},
     2: {"nombre": "PLAN MENSUAL DE SERVICIO\n   + Plataforma Web y App (Android/iOS)\n   + Ubicación en Tiempo Real (30s)\n   + Historial de Rutas (3 Meses)\n   + Alertas de Seguridad", "precio": 300, "alias": "SvcMes"},
@@ -25,7 +26,8 @@ CATALOGO = {
     7: {"nombre": "Cámara Extra (Lateral/Trasera)", "precio": 1800, "alias": "CamExtra"},
     8: {"nombre": "Renta Mensual Dashcam Full", "precio": 600, "alias": "MensDash"},
     9: {"nombre": "Sensor de Combustible (Varilla)\n   + Detección de Ordeña\n   + Litros Exactos", "precio": 7000, "alias": "Sensor"},
-    10: {"nombre": "GPS Magnético (Portátil)\n   + Cero Instalación\n   + Inc. 1 año servicio", "precio": 5500, "alias": "GPSMag"}
+    10: {"nombre": "GPS Magnético (Portátil)\n   + Cero Instalación\n   + Inc. 1 año servicio", "precio": 5500, "alias": "GPSMag"},
+    11: {"nombre": "RENOVACIÓN ANUALIDAD\n   + Servicios de Datos y Plataforma\n   + Cobertura 12 Meses", "precio": 1800, "alias": "Renovacion"}
 }
 
 # --- CLASE PDF ---
@@ -235,8 +237,8 @@ def main():
             if modo_manual:
                 precio_plan_manual = st.number_input("💵 Precio del Plan", value=(1800.0 if "Anual" in tipo_plan else 300.0), step=50.0)
 
-    # 3. OTROS PRODUCTOS
-    with st.expander("📷 Dashcams y Accesorios"):
+    # 3. OTROS PRODUCTOS (ACTUALIZADO TITULO)
+    with st.expander("📷 Productos Adicionales / Renovaciones"):
         carrito_extra = []
         for k, v in CATALOGO.items():
             if k in [1, 2, 3]: continue

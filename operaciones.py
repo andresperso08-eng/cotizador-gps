@@ -6,13 +6,11 @@ import uuid
 from fpdf import FPDF
 from PIL import Image, ExifTags
 import tempfile
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
 import os
-import io
-
-# Librerías para Google Drive
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Sistema GPS LEDAC", layout="wide", page_icon="🛰️")
@@ -31,76 +29,49 @@ if 'nombre_pdf_ultimo' not in st.session_state:
     st.session_state.nombre_pdf_ultimo = None
 
 # ==========================================
-# 🧠 LÓGICA INTELIGENTE DE GOOGLE DRIVE
+# 📧 FUNCIÓN DE ENVÍO POR CORREO (NUEVA)
 # ==========================================
-
-def subir_a_drive(pdf_bytes, nombre_archivo):
-    """Sube el PDF a la carpeta de la semana correspondiente en Drive"""
+def enviar_reporte_email(pdf_bytes, nombre_archivo, cliente, unidad):
     try:
-        # 1. Autenticación (Usamos los mismos secretos que Sheets)
-        # Streamlit guarda los secretos en un diccionario, lo convertimos a credenciales
-        secrets_dict = dict(st.secrets["connections"]["gsheets"])
-        creds = service_account.Credentials.from_service_account_info(
-            secrets_dict,
-            scopes=['https://www.googleapis.com/auth/drive']
-        )
-        service = build('drive', 'v3', credentials=creds)
+        # Cargar credenciales
+        remitente = st.secrets["correo"]["usuario"]
+        password = st.secrets["correo"]["password"]
+        destinatario = st.secrets["correo"]["destinatario"]
 
-        # 2. Calcular Nombre de la Carpeta Semanal (Lunes a Sábado)
-        hoy = datetime.now()
-        inicio_semana = hoy - timedelta(days=hoy.weekday()) # Lunes
-        fin_semana = inicio_semana + timedelta(days=5)      # Sábado
-        nombre_carpeta_semana = f"Semana {inicio_semana.strftime('%d-%m')} al {fin_semana.strftime('%d-%m-%Y')}"
+        msg = MIMEMultipart()
+        msg['From'] = remitente
+        msg['To'] = destinatario
+        msg['Subject'] = f"🛰️ Evidencia GPS: {cliente} - {unidad}"
 
-        # 3. Obtener ID de la Carpeta Maestra (Desde secrets)
-        # Si no lo pusiste en secrets, fallará aquí. Asegúrate de configurar [drive] folder_id
-        try:
-            parent_id = st.secrets["drive"]["folder_id"]
-        except:
-            st.warning("⚠️ No configuraste [drive] folder_id en secrets. Se guardará en la raíz del Drive del Robot.")
-            parent_id = None 
-
-        # 4. Buscar si la carpeta de la semana ya existe
-        query = f"mimeType='application/vnd.google-apps.folder' and name='{nombre_carpeta_semana}' and trashed=false"
-        if parent_id:
-            query += f" and '{parent_id}' in parents"
+        body = f"""
+        Nuevo reporte de instalación generado.
         
-        results = service.files().list(q=query, fields="files(id, name)").execute()
-        items = results.get('files', [])
-
-        if not items:
-            # No existe, CREAR la carpeta
-            metadata_carpeta = {
-                'name': nombre_carpeta_semana,
-                'mimeType': 'application/vnd.google-apps.folder',
-                'parents': [parent_id] if parent_id else []
-            }
-            carpeta = service.files().create(body=metadata_carpeta, fields='id').execute()
-            folder_id_destino = carpeta.get('id')
-            st.toast(f"📁 Carpeta creada: {nombre_carpeta_semana}")
-        else:
-            # Ya existe, usar esa
-            folder_id_destino = items[0]['id']
-
-        # 5. Subir el Archivo PDF
-        file_metadata = {
-            'name': nombre_archivo,
-            'parents': [folder_id_destino]
-        }
+        📅 Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}
+        👤 Cliente: {cliente}
+        🚗 Unidad: {unidad}
         
-        # Convertir bytes a un objeto leíble para la API
-        media = MediaIoBaseUpload(io.BytesIO(pdf_bytes), mimetype='application/pdf')
-        
-        file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-        return True, file.get('id')
+        El PDF con la evidencia fotográfica se adjunta a este correo.
+        """
+        msg.attach(MIMEText(body, 'plain'))
 
+        # Adjuntar PDF
+        adjunto = MIMEApplication(pdf_bytes, Name=nombre_archivo)
+        adjunto['Content-Disposition'] = f'attachment; filename="{nombre_archivo}"'
+        msg.attach(adjunto)
+
+        # Enviar
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(remitente, password)
+        server.send_message(msg)
+        server.quit()
+        return True, "Enviado"
     except Exception as e:
         return False, str(e)
 
 # ==========================================
-# FUNCIONES DE IMAGEN Y PDF (Tus funciones originales)
+# FUNCIONES DE IMAGEN Y PDF
 # ==========================================
-
 def corregir_orientacion(image):
     try:
         for orientation in ExifTags.TAGS.keys():
@@ -170,42 +141,85 @@ def procesar_imagen_subida(uploaded_file):
         except: return None
     return None
 
-# --- VISTAS ---
+# ==========================================
+# VISTAS
+# ==========================================
 
 def vista_admin():
     st.title("👨‍💼 Panel Admin")
-    with st.form("form_alta"):
-        c1, c2 = st.columns(2)
-        cliente = c1.text_input("Cliente")
-        tel = c1.text_input("Teléfono")
-        ubi = c2.text_input("Ubicación")
-        c3, c4 = st.columns(2)
-        fecha_prog = c3.date_input("Fecha")
-        hora_prog = c4.time_input("Hora")
-        vehiculos = st.text_area("Vehículos")
-        notas = st.text_area("Notas")
-        
-        if st.form_submit_button("💾 Guardar Orden"):
-            try:
-                try: df = conn.read(worksheet="Agenda_Servicios", ttl=0)
-                except: df = pd.DataFrame(columns=["ID", "Fecha_Prog", "Hora_Prog", "Cliente", "Telefono", "Ubicacion", "Vehiculos_Desc", "Notas", "Estatus", "Cobro_Final"])
-                
-                id_serv = str(uuid.uuid4())[:6].upper()
-                nuevo = pd.DataFrame([{
-                    "ID": id_serv, "Fecha_Prog": str(fecha_prog), "Hora_Prog": str(hora_prog),
-                    "Cliente": cliente, "Telefono": tel, "Ubicacion": ubi,
-                    "Vehiculos_Desc": vehiculos, "Notas": notas, "Estatus": "PENDIENTE", "Cobro_Final": 0
-                }])
-                conn.update(worksheet="Agenda_Servicios", data=pd.concat([df, nuevo], ignore_index=True) if not df.empty else nuevo)
-                st.success(f"Servicio {id_serv} agendado.")
-            except Exception as e: st.error(f"Error: {e}")
     
-    st.divider()
-    try:
-        df_ver = conn.read(worksheet="Agenda_Servicios", ttl=0)
-        if not df_ver.empty and "Estatus" in df_ver.columns:
-            st.dataframe(df_ver[df_ver["Estatus"] == "PENDIENTE"][["Fecha_Prog", "Cliente", "Vehiculos_Desc"]])
-    except: st.warning("Sin datos.")
+    # --- PESTAÑAS PARA ORGANIZAR ---
+    tab1, tab2, tab3 = st.tabs(["📅 Agendar", "📊 Reporte Semanal", "📋 Bitácora Completa"])
+    
+    # 1. AGENDAR
+    with tab1:
+        with st.form("form_alta"):
+            c1, c2 = st.columns(2)
+            cliente = c1.text_input("Cliente")
+            tel = c1.text_input("Teléfono")
+            ubi = c2.text_input("Ubicación")
+            c3, c4 = st.columns(2)
+            fecha_prog = c3.date_input("Fecha")
+            hora_prog = c4.time_input("Hora")
+            vehiculos = st.text_area("Vehículos")
+            notas = st.text_area("Notas")
+            
+            if st.form_submit_button("💾 Guardar Orden"):
+                try:
+                    try: df = conn.read(worksheet="Agenda_Servicios", ttl=0)
+                    except: df = pd.DataFrame(columns=["ID", "Fecha_Prog", "Hora_Prog", "Cliente", "Telefono", "Ubicacion", "Vehiculos_Desc", "Notas", "Estatus", "Cobro_Final"])
+                    
+                    id_serv = str(uuid.uuid4())[:6].upper()
+                    nuevo = pd.DataFrame([{
+                        "ID": id_serv, "Fecha_Prog": str(fecha_prog), "Hora_Prog": str(hora_prog),
+                        "Cliente": cliente, "Telefono": tel, "Ubicacion": ubi,
+                        "Vehiculos_Desc": vehiculos, "Notas": notas, "Estatus": "PENDIENTE", "Cobro_Final": 0
+                    }])
+                    conn.update(worksheet="Agenda_Servicios", data=pd.concat([df, nuevo], ignore_index=True) if not df.empty else nuevo)
+                    st.success(f"Servicio {id_serv} agendado.")
+                except Exception as e: st.error(f"Error: {e}")
+
+    # 2. REPORTE SEMANAL (LO QUE PEDISTE)
+    with tab2:
+        st.subheader("Generar Resumen de Instalaciones")
+        try:
+            df_hist = conn.read(worksheet="Instalaciones", ttl=0)
+            
+            # Filtros de Fecha
+            col_d1, col_d2 = st.columns(2)
+            fecha_inicio = col_d1.date_input("Desde", value=datetime.now() - timedelta(days=7))
+            fecha_fin = col_d2.date_input("Hasta", value=datetime.now())
+            
+            if st.button("🔎 Generar Reporte"):
+                # Convertir columna Fecha a datetime para filtrar
+                df_hist['Fecha_DT'] = pd.to_datetime(df_hist['Fecha'], format="%d/%m/%Y", errors='coerce')
+                
+                # Filtrar
+                mask = (df_hist['Fecha_DT'].dt.date >= fecha_inicio) & (df_hist['Fecha_DT'].dt.date <= fecha_fin)
+                df_filtrado = df_hist.loc[mask]
+                
+                if not df_filtrado.empty:
+                    st.success(f"Se encontraron {len(df_filtrado)} instalaciones.")
+                    st.dataframe(df_filtrado[["Fecha", "Cliente", "Unidad", "Evidencia"]])
+                    
+                    # Generar CSV para descargar
+                    csv = df_filtrado.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        "📥 Descargar Resumen Semanal (Excel/CSV)",
+                        csv,
+                        f"Resumen_Semanal_{fecha_inicio}_{fecha_fin}.csv",
+                        "text/csv"
+                    )
+                else:
+                    st.warning("No hay instalaciones en esas fechas.")
+        except Exception as e:
+            st.error(f"Error leyendo historial: {e}")
+
+    # 3. BITÁCORA GLOBAL
+    with tab3:
+        try:
+            st.dataframe(conn.read(worksheet="Instalaciones", ttl=0))
+        except: st.write("Sin datos aún.")
 
 def vista_tecnico():
     st.title("🔧 Técnico")
@@ -237,7 +251,7 @@ def vista_tecnico():
         f_vin = c4.file_uploader("PLACAS/VIN", key="fv")
         f_tab = st.file_uploader("TABLERO", key="ft")
         
-        if st.form_submit_button("💾 Guardar y Subir a Drive", type="primary"):
+        if st.form_submit_button("💾 Guardar y Enviar", type="primary"):
             if not unidad: st.warning("Falta nombre unidad.")
             else:
                 fotos = {
@@ -253,13 +267,14 @@ def vista_tecnico():
                     "Cliente": orden['Cliente'], "Unidad": unidad
                 }, fotos)
                 
-                # --- SUBIDA A DRIVE ---
+                # --- ENVÍO POR EMAIL (REEMPLAZA DRIVE) ---
                 nombre_archivo = f"Reporte_{unidad.replace(' ', '_')}_{id_orden}.pdf"
-                with st.spinner("☁️ Subiendo evidencia a la nube..."):
-                    exito, msg = subir_a_drive(pdf_bytes, nombre_archivo)
+                
+                with st.spinner("📧 Enviando respaldo por correo..."):
+                    exito, msg = enviar_reporte_email(pdf_bytes, nombre_archivo, orden['Cliente'], unidad)
                 
                 if exito:
-                    st.toast("✅ ¡Archivo guardado en Drive!", icon="☁️")
+                    st.toast("✅ ¡Evidencia enviada al correo!", icon="📧")
                     st.session_state.pdf_ultimo = pdf_bytes
                     st.session_state.nombre_pdf_ultimo = nombre_archivo
                     
@@ -270,13 +285,13 @@ def vista_tecnico():
                         
                         nuevo = pd.DataFrame([{
                             "ID_Servicio": id_orden, "Fecha": datetime.now().strftime("%d/%m/%Y"),
-                            "Cliente": orden['Cliente'], "Unidad": unidad, "Evidencia": "EN DRIVE"
+                            "Cliente": orden['Cliente'], "Unidad": unidad, "Evidencia": "ENVIADO CORREO"
                         }])
                         conn.update(worksheet="Instalaciones", data=pd.concat([df_h, nuevo], ignore_index=True) if not df_h.empty else nuevo)
-                        st.success(f"Unidad {unidad} registrada y respaldada.")
-                    except: st.error("Se subió a Drive pero falló el registro en Excel.")
+                        st.success(f"Unidad {unidad} registrada.")
+                    except: st.error("Error actualizando Excel.")
                 else:
-                    st.error(f"❌ Falló subida a Drive: {msg}")
+                    st.error(f"❌ Falló el envío de correo: {msg}. Revisa tu contraseña de aplicación.")
 
     if st.session_state.pdf_ultimo:
         st.download_button("📥 Descargar Copia Local", st.session_state.pdf_ultimo, st.session_state.nombre_pdf_ultimo, "application/pdf")

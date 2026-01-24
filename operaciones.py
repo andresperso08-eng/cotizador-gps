@@ -29,11 +29,17 @@ if 'nombre_pdf_ultimo' not in st.session_state:
     st.session_state.nombre_pdf_ultimo = None
 
 # ==========================================
-# 📧 FUNCIÓN DE ENVÍO POR CORREO (NUEVA)
+# 🕒 FUNCIÓN HORA MÉXICO (CORRECCIÓN DE HORA)
 # ==========================================
-def enviar_reporte_email(pdf_bytes, nombre_archivo, cliente, unidad):
+def hora_mexico():
+    """Devuelve la fecha y hora ajustada a México (UTC-6)"""
+    return datetime.utcnow() - timedelta(hours=6)
+
+# ==========================================
+# 📧 FUNCIÓN DE ENVÍO POR CORREO
+# ==========================================
+def enviar_reporte_email(pdf_bytes, nombre_archivo, asunto, cuerpo):
     try:
-        # Cargar credenciales
         remitente = st.secrets["correo"]["usuario"]
         password = st.secrets["correo"]["password"]
         destinatario = st.secrets["correo"]["destinatario"]
@@ -41,25 +47,15 @@ def enviar_reporte_email(pdf_bytes, nombre_archivo, cliente, unidad):
         msg = MIMEMultipart()
         msg['From'] = remitente
         msg['To'] = destinatario
-        msg['Subject'] = f"🛰️ Evidencia GPS: {cliente} - {unidad}"
+        msg['Subject'] = asunto
 
-        body = f"""
-        Nuevo reporte de instalación generado.
-        
-        📅 Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}
-        👤 Cliente: {cliente}
-        🚗 Unidad: {unidad}
-        
-        El PDF con la evidencia fotográfica se adjunta a este correo.
-        """
-        msg.attach(MIMEText(body, 'plain'))
+        msg.attach(MIMEText(cuerpo, 'plain'))
 
         # Adjuntar PDF
         adjunto = MIMEApplication(pdf_bytes, Name=nombre_archivo)
         adjunto['Content-Disposition'] = f'attachment; filename="{nombre_archivo}"'
         msg.attach(adjunto)
 
-        # Enviar
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(remitente, password)
@@ -89,7 +85,7 @@ def corregir_orientacion(image):
 class PDFReporte(FPDF):
     def header(self):
         self.set_font('Arial', 'B', 14)
-        self.cell(0, 10, 'REPORTE DE INSTALACIÓN - EVIDENCIA', 0, 1, 'C')
+        self.cell(0, 10, 'REPORTE DE EVIDENCIA', 0, 1, 'C')
         self.ln(5)
 
 def generar_pdf_evidencia(datos, fotos):
@@ -129,6 +125,49 @@ def generar_pdf_evidencia(datos, fotos):
                 y, x = 20, x_start
     return pdf.output(dest='S').encode('latin-1')
 
+def generar_pdf_resumen_final(cliente, fecha, unidades_df, total_cobrado, metodo_pago):
+    """Genera un PDF con la lista de todas las unidades de la orden"""
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font('Arial', 'B', 16)
+    pdf.cell(0, 10, 'RESUMEN FINAL DE ORDEN DE SERVICIO', 0, 1, 'C')
+    pdf.ln(10)
+    
+    pdf.set_font('Arial', '', 12)
+    pdf.cell(0, 8, f"Cliente: {str(cliente).encode('latin-1', 'ignore').decode('latin-1')}", 0, 1)
+    pdf.cell(0, 8, f"Fecha Cierre: {fecha}", 0, 1)
+    pdf.ln(10)
+    
+    # Tabla de Unidades
+    pdf.set_font('Arial', 'B', 12)
+    pdf.set_fill_color(200, 220, 255)
+    pdf.cell(10, 10, "#", 1, 0, 'C', 1)
+    pdf.cell(100, 10, "UNIDAD / VEHICULO", 1, 0, 'L', 1)
+    pdf.cell(80, 10, "FECHA REGISTRO", 1, 1, 'C', 1)
+    
+    pdf.set_font('Arial', '', 11)
+    count = 1
+    for index, row in unidades_df.iterrows():
+        unidad_limpia = str(row['Unidad']).encode('latin-1', 'ignore').decode('latin-1')
+        pdf.cell(10, 10, str(count), 1, 0, 'C')
+        pdf.cell(100, 10, f" {unidad_limpia}", 1, 0, 'L')
+        pdf.cell(80, 10, str(row['Fecha']), 1, 1, 'C')
+        count += 1
+        
+    pdf.ln(10)
+    pdf.set_font('Arial', 'B', 12)
+    pdf.cell(0, 10, "DETALLE DE COBRO (Técnico):", 0, 1)
+    pdf.set_font('Arial', '', 12)
+    pdf.cell(0, 8, f"Metodo de Pago: {metodo_pago}", 0, 1)
+    
+    if metodo_pago == "Efectivo":
+        pdf.set_font('Arial', 'B', 14)
+        pdf.cell(0, 10, f"Monto Recibido en Efectivo: ${total_cobrado:,.2f}", 0, 1)
+    else:
+        pdf.cell(0, 8, "Monto Recibido en Efectivo: $0.00 (Transferencia/Crédito)", 0, 1)
+
+    return pdf.output(dest='S').encode('latin-1')
+
 def procesar_imagen_subida(uploaded_file):
     if uploaded_file:
         try:
@@ -148,7 +187,6 @@ def procesar_imagen_subida(uploaded_file):
 def vista_admin():
     st.title("👨‍💼 Panel Admin")
     
-    # --- PESTAÑAS PARA ORGANIZAR ---
     tab1, tab2, tab3 = st.tabs(["📅 Agendar", "📊 Reporte Semanal", "📋 Bitácora Completa"])
     
     # 1. AGENDAR
@@ -179,37 +217,27 @@ def vista_admin():
                     st.success(f"Servicio {id_serv} agendado.")
                 except Exception as e: st.error(f"Error: {e}")
 
-    # 2. REPORTE SEMANAL (LO QUE PEDISTE)
+    # 2. REPORTE SEMANAL
     with tab2:
         st.subheader("Generar Resumen de Instalaciones")
         try:
             df_hist = conn.read(worksheet="Instalaciones", ttl=0)
-            
-            # Filtros de Fecha
             col_d1, col_d2 = st.columns(2)
-            fecha_inicio = col_d1.date_input("Desde", value=datetime.now() - timedelta(days=7))
-            fecha_fin = col_d2.date_input("Hasta", value=datetime.now())
+            # Usar hora_mexico() para las fechas por defecto
+            hoy_mx = hora_mexico().date()
+            fecha_inicio = col_d1.date_input("Desde", value=hoy_mx - timedelta(days=7))
+            fecha_fin = col_d2.date_input("Hasta", value=hoy_mx)
             
             if st.button("🔎 Generar Reporte"):
-                # Convertir columna Fecha a datetime para filtrar
                 df_hist['Fecha_DT'] = pd.to_datetime(df_hist['Fecha'], format="%d/%m/%Y", errors='coerce')
-                
-                # Filtrar
                 mask = (df_hist['Fecha_DT'].dt.date >= fecha_inicio) & (df_hist['Fecha_DT'].dt.date <= fecha_fin)
                 df_filtrado = df_hist.loc[mask]
                 
                 if not df_filtrado.empty:
                     st.success(f"Se encontraron {len(df_filtrado)} instalaciones.")
                     st.dataframe(df_filtrado[["Fecha", "Cliente", "Unidad", "Evidencia"]])
-                    
-                    # Generar CSV para descargar
                     csv = df_filtrado.to_csv(index=False).encode('utf-8')
-                    st.download_button(
-                        "📥 Descargar Resumen Semanal (Excel/CSV)",
-                        csv,
-                        f"Resumen_Semanal_{fecha_inicio}_{fecha_fin}.csv",
-                        "text/csv"
-                    )
+                    st.download_button("📥 Descargar Excel", csv, f"Resumen_{fecha_inicio}_{fecha_fin}.csv", "text/csv")
                 else:
                     st.warning("No hay instalaciones en esas fechas.")
         except Exception as e:
@@ -217,8 +245,7 @@ def vista_admin():
 
     # 3. BITÁCORA GLOBAL
     with tab3:
-        try:
-            st.dataframe(conn.read(worksheet="Instalaciones", ttl=0))
+        try: st.dataframe(conn.read(worksheet="Instalaciones", ttl=0))
         except: st.write("Sin datos aún.")
 
 def vista_tecnico():
@@ -241,6 +268,7 @@ def vista_tecnico():
 
     st.info(f"Cliente: {orden['Cliente']} | Notas: {orden['Notas']}")
 
+    # --- FORMULARIO DE UNIDAD INDIVIDUAL ---
     with st.form("form_tec", clear_on_submit=True):
         unidad = st.text_input("Unidad / Placas")
         c1, c2 = st.columns(2)
@@ -251,7 +279,7 @@ def vista_tecnico():
         f_vin = c4.file_uploader("PLACAS/VIN", key="fv")
         f_tab = st.file_uploader("TABLERO", key="ft")
         
-        if st.form_submit_button("💾 Guardar y Enviar", type="primary"):
+        if st.form_submit_button("💾 Guardar y Enviar Evidencia", type="primary"):
             if not unidad: st.warning("Falta nombre unidad.")
             else:
                 fotos = {
@@ -262,45 +290,104 @@ def vista_tecnico():
                     "TABLERO": procesar_imagen_subida(f_tab)
                 }
                 
+                # Usar hora_mexico()
+                fecha_mx = hora_mexico().strftime("%d/%m/%Y %H:%M")
+                fecha_corta_mx = hora_mexico().strftime("%d/%m/%Y")
+
                 pdf_bytes = generar_pdf_evidencia({
-                    "Orden": id_orden, "Fecha": datetime.now().strftime("%d/%m/%Y %H:%M"),
+                    "Orden": id_orden, "Fecha": fecha_mx,
                     "Cliente": orden['Cliente'], "Unidad": unidad
                 }, fotos)
                 
-                # --- ENVÍO POR EMAIL (REEMPLAZA DRIVE) ---
-                nombre_archivo = f"Reporte_{unidad.replace(' ', '_')}_{id_orden}.pdf"
+                nombre_archivo = f"Evidencia_{unidad.replace(' ', '_')}_{id_orden}.pdf"
                 
-                with st.spinner("📧 Enviando respaldo por correo..."):
-                    exito, msg = enviar_reporte_email(pdf_bytes, nombre_archivo, orden['Cliente'], unidad)
+                with st.spinner("📧 Enviando evidencia..."):
+                    cuerpo_mail = f"Unidad instalada: {unidad}\nCliente: {orden['Cliente']}\nFecha: {fecha_mx}"
+                    exito, msg = enviar_reporte_email(pdf_bytes, nombre_archivo, f"Evidencia: {unidad}", cuerpo_mail)
                 
                 if exito:
-                    st.toast("✅ ¡Evidencia enviada al correo!", icon="📧")
+                    st.toast("✅ ¡Evidencia enviada!", icon="📧")
                     st.session_state.pdf_ultimo = pdf_bytes
                     st.session_state.nombre_pdf_ultimo = nombre_archivo
                     
-                    # Guardar bitácora en Sheets
                     try:
                         try: df_h = conn.read(worksheet="Instalaciones", ttl=0)
                         except: df_h = pd.DataFrame(columns=["ID_Servicio", "Fecha", "Cliente", "Unidad", "Evidencia"])
                         
                         nuevo = pd.DataFrame([{
-                            "ID_Servicio": id_orden, "Fecha": datetime.now().strftime("%d/%m/%Y"),
-                            "Cliente": orden['Cliente'], "Unidad": unidad, "Evidencia": "ENVIADO CORREO"
+                            "ID_Servicio": id_orden, "Fecha": fecha_corta_mx,
+                            "Cliente": orden['Cliente'], "Unidad": unidad, "Evidencia": "ENVIADO"
                         }])
                         conn.update(worksheet="Instalaciones", data=pd.concat([df_h, nuevo], ignore_index=True) if not df_h.empty else nuevo)
                         st.success(f"Unidad {unidad} registrada.")
-                    except: st.error("Error actualizando Excel.")
+                    except: st.error("Error Excel.")
                 else:
-                    st.error(f"❌ Falló el envío de correo: {msg}. Revisa tu contraseña de aplicación.")
+                    st.error(f"❌ Falló mail: {msg}")
 
     if st.session_state.pdf_ultimo:
         st.download_button("📥 Descargar Copia Local", st.session_state.pdf_ultimo, st.session_state.nombre_pdf_ultimo, "application/pdf")
 
-    with st.expander("Finalizar Orden"):
-        if st.button("Cerrar Orden"):
-            df_agenda.loc[lista[lista == sel].index[0], "Estatus"] = "FINALIZADO"
-            conn.update(worksheet="Agenda_Servicios", data=df_agenda)
-            st.rerun()
+    st.divider()
+
+    # --- FINALIZAR ORDEN COMPLETA (RESUMEN AGRUPADO) ---
+    with st.expander("💰 Finalizar Orden y Generar Reporte Final", expanded=True):
+        st.markdown("### Cierre de Servicio")
+        
+        # 1. Selector de Pago (Lógica nueva)
+        tipo_pago = st.selectbox("Método de Pago", ["Transferencia", "Efectivo", "Pendiente/Crédito"])
+        
+        monto = 0.0
+        if tipo_pago == "Efectivo":
+            monto = st.number_input("Monto Recibido en Efectivo ($)", min_value=0.0, step=50.0)
+        else:
+            st.info(f"Pago por {tipo_pago}. No se requiere ingresar monto.")
+        
+        if st.button("🔒 CERRAR ORDEN Y ENVIAR RESUMEN"):
+            with st.spinner("Generando reporte final agrupado..."):
+                # 1. Buscar todas las unidades de esta orden
+                try:
+                    df_inst = conn.read(worksheet="Instalaciones", ttl=0)
+                    unidades_orden = df_inst[df_inst['ID_Servicio'] == id_orden]
+                except:
+                    unidades_orden = pd.DataFrame() # Vacío si falla
+
+                # 2. Generar PDF Resumen
+                fecha_cierre = hora_mexico().strftime("%d/%m/%Y %H:%M")
+                pdf_resumen = generar_pdf_resumen_final(orden['Cliente'], fecha_cierre, unidades_orden, monto, tipo_pago)
+                
+                # 3. Enviar Correo Final
+                nombre_resumen = f"RESUMEN_FINAL_{orden['Cliente'].replace(' ', '_')}.pdf"
+                cuerpo_resumen = f"""
+                SERVICIO FINALIZADO
+                
+                Cliente: {orden['Cliente']}
+                Fecha Cierre: {fecha_cierre}
+                Total Unidades: {len(unidades_orden)}
+                
+                Cobro Efectivo: ${monto:,.2f}
+                Método: {tipo_pago}
+                """
+                enviar_reporte_email(pdf_resumen, nombre_resumen, f"🏁 FIN DE ORDEN: {orden['Cliente']}", cuerpo_resumen)
+
+                # 4. Actualizar Agenda
+                try:
+                    # Recargar agenda por si cambió algo
+                    df_agenda_fresh = conn.read(worksheet="Agenda_Servicios", ttl=0)
+                    # Buscar el indice correcto de nuevo (seguridad)
+                    idx_final = df_agenda_fresh[df_agenda_fresh['ID'] == id_orden].index[0]
+                    
+                    df_agenda_fresh.at[idx_final, "Estatus"] = "FINALIZADO"
+                    df_agenda_fresh.at[idx_final, "Cobro_Final"] = monto
+                    
+                    conn.update(worksheet="Agenda_Servicios", data=df_agenda_fresh)
+                    
+                    st.balloons()
+                    st.success("✅ Orden Cerrada. El reporte final con todas las unidades se envió a tu correo.")
+                    st.session_state.pdf_ultimo = None # Limpiar
+                    st.rerun()
+                    
+                except Exception as e:
+                    st.error(f"Error cerrando orden: {e}")
 
 def main():
     st.sidebar.title("Navegación")

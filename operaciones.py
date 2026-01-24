@@ -18,10 +18,16 @@ except Exception as e:
     st.error(f"🚨 Error de conexión. Revisa tu archivo secrets.toml: {e}")
     st.stop()
 
+# --- ESTADO DE SESIÓN (MEMORIA) ---
+if 'pdf_ultimo' not in st.session_state:
+    st.session_state.pdf_ultimo = None
+if 'nombre_pdf_ultimo' not in st.session_state:
+    st.session_state.nombre_pdf_ultimo = None
+
 # --- FUNCIONES DE IMAGEN Y PDF ---
 
 def corregir_orientacion(image):
-    """Corrige la rotación automática de fotos tomadas con celular (Samsung/iPhone)"""
+    """Corrige la rotación automática de fotos tomadas con celular"""
     try:
         for orientation in ExifTags.TAGS.keys():
             if ExifTags.TAGS[orientation] == 'Orientation':
@@ -37,7 +43,7 @@ def corregir_orientacion(image):
             elif orientation == 8:
                 image = image.rotate(90, expand=True)
     except:
-        pass # Si falla, devolvemos la imagen tal cual
+        pass 
     return image
 
 class PDFReporte(FPDF):
@@ -56,7 +62,6 @@ def generar_pdf_evidencia(datos, fotos):
         pdf.set_font('Arial', 'B', 11)
         pdf.cell(50, 8, f"{key}:", 0, 0)
         pdf.set_font('Arial', '', 11)
-        # Limpiar texto de caracteres raros
         texto_limpio = str(value).encode('latin-1', 'ignore').decode('latin-1')
         pdf.cell(0, 8, texto_limpio, 0, 1)
     
@@ -93,15 +98,14 @@ def generar_pdf_evidencia(datos, fotos):
     return pdf.output(dest='S').encode('latin-1')
 
 def procesar_imagen_subida(uploaded_file):
-    """Recibe el archivo de streamlit, corrige rotación y guarda temporal"""
     if uploaded_file is not None:
         try:
             image = Image.open(uploaded_file)
             image = corregir_orientacion(image)
-            image = image.convert('RGB') # Convertir a JPG compatible
+            image = image.convert('RGB')
             
             temp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
-            image.save(temp.name, quality=70) # Calidad 70 para que no pese tanto
+            image.save(temp.name, quality=70) 
             return temp.name
         except Exception as e:
             st.error(f"Error procesando imagen: {e}")
@@ -209,12 +213,12 @@ def vista_tecnico():
 
     # 4. Formulario de Instalación
     st.subheader("📸 Registro de Unidad")
-    st.caption("Usa 'Tomar Foto' para usar la cámara trasera con mejor calidad.")
+    st.caption("Usa 'Tomar Foto' para usar la cámara trasera.")
 
+    # --- INICIO DEL FORMULARIO ---
     with st.form("form_tecnico", clear_on_submit=True):
         nombre_unidad = st.text_input("🚙 Vehículo / Placas", placeholder="Ej: Nissan Versa - Placas SRX-99")
         
-        # CAMBIO CLAVE: Usamos file_uploader para permitir cámara nativa trasera
         c1, c2 = st.columns(2)
         foto_chip = c1.file_uploader("Foto CHIP", type=['png', 'jpg', 'jpeg'], key="up_chip")
         foto_gps = c2.file_uploader("Foto GPS Instalado", type=['png', 'jpg', 'jpeg'], key="up_gps")
@@ -250,7 +254,11 @@ def vista_tecnico():
                 
                 pdf_bytes = generar_pdf_evidencia(datos_pdf, fotos_paths)
                 
-                # Guardar en Sheet "Instalaciones"
+                # Guardar en Session State para descargar afuera del form
+                st.session_state.pdf_ultimo = pdf_bytes
+                st.session_state.nombre_pdf_ultimo = f"Reporte_{nombre_unidad}.pdf"
+                
+                # Guardar en Google Sheets
                 try:
                     try:
                         df_hist = conn.read(worksheet="Instalaciones", ttl=0)
@@ -271,19 +279,24 @@ def vista_tecnico():
                         df_final_hist = pd.concat([df_hist, nuevo_reg], ignore_index=True)
 
                     conn.update(worksheet="Instalaciones", data=df_final_hist)
-                    
-                    st.success(f"✅ {nombre_unidad} registrada.")
-                    
-                    # Botón descarga inmediata
-                    st.download_button(
-                        label="📥 Descargar Reporte PDF",
-                        data=pdf_bytes,
-                        file_name=f"Reporte_{nombre_unidad}.pdf",
-                        mime="application/pdf"
-                    )
+                    st.success(f"✅ {nombre_unidad} registrada en la nube.")
                     
                 except Exception as e:
                     st.error(f"Error guardando bitácora: {e}")
+    # --- FIN DEL FORMULARIO ---
+
+    # BOTÓN DE DESCARGA (AFUERA DEL FORM)
+    if st.session_state.pdf_ultimo is not None:
+        st.divider()
+        st.markdown("### 📥 Descargar Evidencia")
+        st.download_button(
+            label="📄 Bajar PDF de la última unidad",
+            data=st.session_state.pdf_ultimo,
+            file_name=st.session_state.nombre_pdf_ultimo,
+            mime="application/pdf",
+            type="secondary",
+            use_container_width=True
+        )
 
     st.divider()
 
@@ -299,6 +312,8 @@ def vista_tecnico():
                 conn.update(worksheet="Agenda_Servicios", data=df_agenda)
                 st.balloons()
                 st.success("Orden finalizada.")
+                # Limpiamos el estado del PDF para que no salga en la siguiente orden
+                st.session_state.pdf_ultimo = None
                 st.rerun()
             except Exception as e:
                 st.error(f"Error: {e}")

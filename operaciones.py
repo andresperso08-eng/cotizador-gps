@@ -4,21 +4,42 @@ from datetime import datetime
 from streamlit_gsheets import GSheetsConnection
 import uuid
 from fpdf import FPDF
-from PIL import Image
+from PIL import Image, ExifTags
 import tempfile
 import os
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
-st.set_page_config(page_title="Sistema de Operaciones GPS", layout="wide", page_icon="🛠️")
+st.set_page_config(page_title="Sistema GPS LEDAC", layout="wide", page_icon="🛰️")
 
-# Intentamos conectar mostrando el error si falla
+# --- CONEXIÓN A GOOGLE SHEETS ---
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
 except Exception as e:
-    st.error(f"🚨 Error crítico de configuración en secrets.toml: {e}")
+    st.error(f"🚨 Error de conexión. Revisa tu archivo secrets.toml: {e}")
     st.stop()
 
-# --- CLASE PDF PARA EVIDENCIA ---
+# --- FUNCIONES DE IMAGEN Y PDF ---
+
+def corregir_orientacion(image):
+    """Corrige la rotación automática de fotos tomadas con celular (Samsung/iPhone)"""
+    try:
+        for orientation in ExifTags.TAGS.keys():
+            if ExifTags.TAGS[orientation] == 'Orientation':
+                break
+        
+        exif = image._getexif()
+        if exif is not None:
+            orientation = exif.get(orientation)
+            if orientation == 3:
+                image = image.rotate(180, expand=True)
+            elif orientation == 6:
+                image = image.rotate(270, expand=True)
+            elif orientation == 8:
+                image = image.rotate(90, expand=True)
+    except:
+        pass # Si falla, devolvemos la imagen tal cual
+    return image
+
 class PDFReporte(FPDF):
     def header(self):
         self.set_font('Arial', 'B', 14)
@@ -35,7 +56,9 @@ def generar_pdf_evidencia(datos, fotos):
         pdf.set_font('Arial', 'B', 11)
         pdf.cell(50, 8, f"{key}:", 0, 0)
         pdf.set_font('Arial', '', 11)
-        pdf.cell(0, 8, str(value), 0, 1)
+        # Limpiar texto de caracteres raros
+        texto_limpio = str(value).encode('latin-1', 'ignore').decode('latin-1')
+        pdf.cell(0, 8, texto_limpio, 0, 1)
     
     pdf.ln(5)
     
@@ -69,180 +92,163 @@ def generar_pdf_evidencia(datos, fotos):
 
     return pdf.output(dest='S').encode('latin-1')
 
-# --- FUNCIÓN AUXILIAR PARA LEER DATOS SIN TRONAR ---
-def cargar_datos(hoja):
-    try:
-        df = conn.read(worksheet=hoja, ttl=0)
-        return df
-    except Exception as e:
-        # Si falla, regresamos un error explicito
-        return None, str(e)
+def procesar_imagen_subida(uploaded_file):
+    """Recibe el archivo de streamlit, corrige rotación y guarda temporal"""
+    if uploaded_file is not None:
+        try:
+            image = Image.open(uploaded_file)
+            image = corregir_orientacion(image)
+            image = image.convert('RGB') # Convertir a JPG compatible
+            
+            temp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+            image.save(temp.name, quality=70) # Calidad 70 para que no pese tanto
+            return temp.name
+        except Exception as e:
+            st.error(f"Error procesando imagen: {e}")
+            return None
+    return None
 
-# --- VISTA 1: ADMINISTRADOR (TÚ) ---
+# --- VISTA 1: ADMINISTRADOR ---
 def vista_admin():
     st.title("👨‍💼 Panel de Control (Admin)")
-    st.markdown("### 📅 Cargar Nuevo Servicio")
     
-    with st.form("form_alta"):
-        c1, c2 = st.columns(2)
-        cliente = c1.text_input("Nombre del Cliente")
-        tel = c1.text_input("Teléfono / WhatsApp")
-        ubi = c1.text_input("Ubicación (Link de Google Maps)")
-        
-        c3, c4 = st.columns(2)
-        fecha_prog = c3.date_input("Fecha Programada")
-        hora_prog = c4.time_input("Hora Programada")
-        
-        vehiculos_desc = st.text_area("Descripción de Vehículos", placeholder="Ej: 3 Unidades (1 Versa Rojo, 1 NP300 Blanca, 1 Moto)")
-        notas = st.text_area("Notas para el Técnico", placeholder="Ej: Cobrar $200 de viáticos extra. Preguntar por Sr. Juan.")
-        
-        if st.form_submit_button("💾 Guardar y Asignar"):
-            try:
-                # 1. Intentamos leer, si falla o está vacío, creamos el DF desde cero
-                try:
-                    df = conn.read(worksheet="Agenda_Servicios", ttl=0)
-                except:
-                    df = pd.DataFrame(columns=["ID", "Fecha_Prog", "Hora_Prog", "Cliente", "Telefono", "Ubicacion", "Vehiculos_Desc", "Notas", "Estatus", "Cobro_Final"])
-
-                id_serv = str(uuid.uuid4())[:6].upper()
-                
-                nuevo = pd.DataFrame([{
-                    "ID": id_serv,
-                    "Fecha_Prog": str(fecha_prog),
-                    "Hora_Prog": str(hora_prog),
-                    "Cliente": cliente,
-                    "Telefono": tel,
-                    "Ubicacion": ubi,
-                    "Vehiculos_Desc": vehiculos_desc,
-                    "Notas": notas,
-                    "Estatus": "PENDIENTE",
-                    "Cobro_Final": 0
-                }])
-                
-                # Si el df original estaba vacío, usamos solo el nuevo
-                if df.empty:
-                    df_final = nuevo
-                else:
-                    df_final = pd.concat([df, nuevo], ignore_index=True)
-                
-                conn.update(worksheet="Agenda_Servicios", data=df_final)
-                st.success(f"✅ Servicio agendado con ID: {id_serv}")
+    with st.expander("📅 Agendar Nuevo Servicio", expanded=True):
+        with st.form("form_alta"):
+            c1, c2 = st.columns(2)
+            cliente = c1.text_input("Nombre del Cliente")
+            tel = c1.text_input("Teléfono / WhatsApp")
+            ubi = c2.text_input("Ubicación (Link Maps)")
             
-            except Exception as e:
-                st.error(f"🛑 ERROR AL GUARDAR EN SHEETS: {e}")
-                st.info("Revisa que hayas compartido el Excel con el correo del Service Account y que tenga permiso de EDITOR.")
+            c3, c4 = st.columns(2)
+            fecha_prog = c3.date_input("Fecha Programada")
+            hora_prog = c4.time_input("Hora Programada")
+            
+            vehiculos_desc = st.text_area("Descripción Vehículos")
+            notas = st.text_area("Notas para Técnico")
+            
+            if st.form_submit_button("💾 Guardar Orden"):
+                try:
+                    try:
+                        df = conn.read(worksheet="Agenda_Servicios", ttl=0)
+                    except:
+                        df = pd.DataFrame(columns=["ID", "Fecha_Prog", "Hora_Prog", "Cliente", "Telefono", "Ubicacion", "Vehiculos_Desc", "Notas", "Estatus", "Cobro_Final"])
+
+                    id_serv = str(uuid.uuid4())[:6].upper()
+                    
+                    nuevo = pd.DataFrame([{
+                        "ID": id_serv,
+                        "Fecha_Prog": str(fecha_prog),
+                        "Hora_Prog": str(hora_prog),
+                        "Cliente": cliente,
+                        "Telefono": tel,
+                        "Ubicacion": ubi,
+                        "Vehiculos_Desc": vehiculos_desc,
+                        "Notas": notas,
+                        "Estatus": "PENDIENTE",
+                        "Cobro_Final": 0
+                    }])
+                    
+                    if df.empty:
+                        df_final = nuevo
+                    else:
+                        df_final = pd.concat([df, nuevo], ignore_index=True)
+                    
+                    conn.update(worksheet="Agenda_Servicios", data=df_final)
+                    st.success(f"✅ Servicio ID: {id_serv} agendado.")
+                except Exception as e:
+                    st.error(f"Error: {e}")
 
     st.divider()
-    st.markdown("### 📋 Tablero de Pendientes")
+    st.markdown("### 📋 Servicios Pendientes")
     try:
         df_ver = conn.read(worksheet="Agenda_Servicios", ttl=0)
-        # Filtramos errores comunes de columnas vacias
         if not df_ver.empty and "Estatus" in df_ver.columns:
             pendientes = df_ver[df_ver["Estatus"] == "PENDIENTE"]
             if not pendientes.empty:
-                st.dataframe(pendientes[["Fecha_Prog", "Hora_Prog", "Cliente", "Vehiculos_Desc", "Ubicacion"]])
+                st.dataframe(pendientes[["Fecha_Prog", "Hora_Prog", "Cliente", "Vehiculos_Desc"]])
             else:
-                st.info("No hay servicios pendientes.")
-        else:
-            st.warning("La hoja 'Agenda_Servicios' está vacía o no tiene las columnas correctas.")
-    except Exception as e:
-        st.error(f"No se pudo leer la hoja 'Agenda_Servicios': {e}")
+                st.info("No hay pendientes.")
+    except:
+        st.warning("No se pudo leer la agenda.")
 
-# --- VISTA 2: TÉCNICO (CAMPO) ---
+# --- VISTA 2: TÉCNICO ---
 def vista_tecnico():
     st.title("🔧 App Técnico")
-    st.markdown("Selecciona un servicio para trabajar:")
-
-    # 1. Cargar Agenda con Debug
+    
+    # 1. Cargar Datos
     try:
         df_agenda = conn.read(worksheet="Agenda_Servicios", ttl=0)
         if "Estatus" not in df_agenda.columns:
-             st.error("⚠️ La hoja 'Agenda_Servicios' no tiene la columna 'Estatus'.")
-             return
+            st.error("Falta columna 'Estatus' en Sheet.")
+            return
         mis_servicios = df_agenda[df_agenda["Estatus"] == "PENDIENTE"]
     except Exception as e:
-        st.error(f"🛑 ERROR CONECTANDO A BD: {e}")
+        st.error("Error de conexión.")
         return
 
     if mis_servicios.empty:
-        st.success("🎉 Todo limpio. No hay servicios pendientes.")
+        st.success("🎉 No tienes trabajos pendientes.")
         return
 
-    # 2. Selector Inteligente
-    try:
-        lista_opciones = mis_servicios.apply(lambda x: f"{x['Fecha_Prog']} {x['Hora_Prog']} - {x['Cliente']}", axis=1)
-        seleccion = st.selectbox("📍 Órdenes de Trabajo:", lista_opciones)
-        
-        # Recuperar datos del servicio seleccionado
-        index_serv = lista_opciones[lista_opciones == seleccion].index[0]
-        orden = mis_servicios.loc[index_serv]
-        id_orden = orden['ID']
-    except Exception as e:
-        st.error(f"Error procesando los datos: {e}")
-        return
+    # 2. Selector
+    lista_opciones = mis_servicios.apply(lambda x: f"{x['Cliente']} ({x['Vehiculos_Desc']})", axis=1)
+    seleccion = st.selectbox("📍 Selecciona la Orden:", lista_opciones)
+    
+    index_serv = lista_opciones[lista_opciones == seleccion].index[0]
+    orden = mis_servicios.loc[index_serv]
+    id_orden = orden['ID']
 
-    # 3. Mostrar Detalles
-    with st.container():
-        st.info(f"""
-        **👤 Cliente:** {orden['Cliente']}
-        **📞 Tel:** {orden['Telefono']}
-        **📍 Ubicación:** {orden['Ubicacion']}
-        **🚗 Vehículos:** {orden['Vehiculos_Desc']}
-        **📝 Notas:** {orden['Notas']}
-        """)
+    # 3. Detalles
+    st.info(f"""
+    **Cliente:** {orden['Cliente']} | **Tel:** {orden['Telefono']}
+    **Ubicación:** {orden['Ubicacion']}
+    **Notas:** {orden['Notas']}
+    """)
 
     st.divider()
 
-    # 4. Módulo de Instalación (Bucle)
-    st.subheader(f"🛠️ Instalación - Orden #{id_orden}")
-    st.caption("Llena este formulario por CADA vehículo. Al guardar, se limpiará para el siguiente.")
+    # 4. Formulario de Instalación
+    st.subheader("📸 Registro de Unidad")
+    st.caption("Usa 'Tomar Foto' para usar la cámara trasera con mejor calidad.")
 
     with st.form("form_tecnico", clear_on_submit=True):
-        nombre_unidad = st.text_input("🚙 Nombre / Placas de la Unidad", placeholder="Ej: Nissan Versa 2024 - Placas SRX-99")
+        nombre_unidad = st.text_input("🚙 Vehículo / Placas", placeholder="Ej: Nissan Versa - Placas SRX-99")
         
-        st.write("📸 **Evidencia Fotográfica**")
+        # CAMBIO CLAVE: Usamos file_uploader para permitir cámara nativa trasera
         c1, c2 = st.columns(2)
-        foto_chip = c1.camera_input("Foto del CHIP", key="f_chip")
-        foto_gps = c2.camera_input("Foto del GPS", key="f_gps")
+        foto_chip = c1.file_uploader("Foto CHIP", type=['png', 'jpg', 'jpeg'], key="up_chip")
+        foto_gps = c2.file_uploader("Foto GPS Instalado", type=['png', 'jpg', 'jpeg'], key="up_gps")
         
         c3, c4 = st.columns(2)
-        foto_carro = c3.camera_input("Foto del CARRO (Exterior)", key="f_carro")
-        foto_placas = c4.camera_input("Foto de las PLACAS", key="f_placas")
+        foto_carro = c3.file_uploader("Foto AUTO (Exterior)", type=['png', 'jpg', 'jpeg'], key="up_carro")
+        foto_placas = c4.file_uploader("Foto PLACAS / VIN", type=['png', 'jpg', 'jpeg'], key="up_placas")
         
-        foto_tablero = st.camera_input("Foto del TABLERO (Km/Gas)", key="f_tablero")
+        foto_tablero = st.file_uploader("Foto TABLERO (Km)", type=['png', 'jpg', 'jpeg'], key="up_tablero")
         
-        btn_guardar_unidad = st.form_submit_button("💾 Guardar Unidad y Generar PDF")
+        btn_guardar = st.form_submit_button("💾 Guardar Unidad", type="primary", use_container_width=True)
 
-        if btn_guardar_unidad:
+        if btn_guardar:
             if not nombre_unidad:
-                st.warning("⚠️ Falta el nombre de la unidad.")
+                st.warning("⚠️ Escribe el nombre o placas del vehículo.")
             else:
-                fotos = {"CHIP": None, "GPS": None, "CARRO": None, "PLACAS": None, "TABLERO": None}
+                # Procesar imágenes
+                fotos_paths = {
+                    "CHIP": procesar_imagen_subida(foto_chip),
+                    "GPS UBICACION": procesar_imagen_subida(foto_gps),
+                    "EXTERIOR": procesar_imagen_subida(foto_carro),
+                    "PLACAS/VIN": procesar_imagen_subida(foto_placas),
+                    "TABLERO": procesar_imagen_subida(foto_tablero)
+                }
                 
-                def guardar_temp(upload_file):
-                    if upload_file:
-                        temp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
-                        img = Image.open(upload_file)
-                        img.save(temp.name)
-                        return temp.name
-                    return None
-
-                fotos["CHIP"] = guardar_temp(foto_chip)
-                fotos["GPS"] = guardar_temp(foto_gps)
-                fotos["CARRO"] = guardar_temp(foto_carro)
-                fotos["PLACAS"] = guardar_temp(foto_placas)
-                fotos["TABLERO"] = guardar_temp(foto_tablero)
-
-                # Generar PDF
+                # Crear PDF
                 datos_pdf = {
                     "Orden ID": id_orden,
                     "Fecha": datetime.now().strftime("%d/%m/%Y %H:%M"),
-                    "Técnico": "En Sitio",
                     "Cliente": orden['Cliente'],
                     "Unidad": nombre_unidad
                 }
                 
-                pdf_bytes = generar_pdf_evidencia(datos_pdf, fotos)
+                pdf_bytes = generar_pdf_evidencia(datos_pdf, fotos_paths)
                 
                 # Guardar en Sheet "Instalaciones"
                 try:
@@ -266,38 +272,42 @@ def vista_tecnico():
 
                     conn.update(worksheet="Instalaciones", data=df_final_hist)
                     
-                    st.success(f"✅ Unidad '{nombre_unidad}' guardada correctamente.")
-                    st.download_button("📥 Descargar PDF Evidencia", pdf_bytes, f"Evidencia_{nombre_unidad}.pdf", "application/pdf")
+                    st.success(f"✅ {nombre_unidad} registrada.")
+                    
+                    # Botón descarga inmediata
+                    st.download_button(
+                        label="📥 Descargar Reporte PDF",
+                        data=pdf_bytes,
+                        file_name=f"Reporte_{nombre_unidad}.pdf",
+                        mime="application/pdf"
+                    )
                     
                 except Exception as e:
-                    st.error(f"Error guardando en bitácora: {e}")
+                    st.error(f"Error guardando bitácora: {e}")
 
     st.divider()
 
-    # 5. Cierre de Orden
-    st.markdown("### 💰 Finalizar Servicio")
-    with st.expander("Clic aquí cuando acabes TODOS los carros", expanded=False):
-        tipo_pago = st.selectbox("Forma de Pago", ["Efectivo", "Transferencia", "Pendiente / Crédito"])
-        monto_cobrado = st.number_input("Monto Recibido ($)", min_value=0.0, step=50.0)
+    # 5. Cierre
+    with st.expander("💰 Finalizar Servicio Completo (Cobro)"):
+        tipo_pago = st.selectbox("Método de Pago", ["Efectivo", "Transferencia", "Pendiente"])
+        monto = st.number_input("Monto Cobrado", min_value=0.0)
         
-        if st.button("🔒 CERRAR ORDEN DEFINITIVAMENTE"):
+        if st.button("🔒 CERRAR ORDEN"):
             try:
                 df_agenda.loc[index_serv, "Estatus"] = "FINALIZADO"
-                df_agenda.loc[index_serv, "Cobro_Final"] = monto_cobrado
+                df_agenda.loc[index_serv, "Cobro_Final"] = monto
                 conn.update(worksheet="Agenda_Servicios", data=df_agenda)
-                
                 st.balloons()
-                st.success("Orden Cerrada. ¡Buen trabajo!")
+                st.success("Orden finalizada.")
                 st.rerun()
             except Exception as e:
-                st.error(f"Error al cerrar: {e}")
+                st.error(f"Error: {e}")
 
-# --- MENU PRINCIPAL (SIDEBAR) ---
+# --- MAIN ---
 def main():
     st.sidebar.title("Navegación")
-    modo = st.sidebar.radio("Ir a:", ["🔧 Técnico (App Móvil)", "👨‍💼 Administrador (Oficina)"])
-
-    if modo == "👨‍💼 Administrador (Oficina)":
+    modo = st.sidebar.radio("Perfil:", ["🔧 Técnico (Campo)", "👨‍💼 Admin (Oficina)"])
+    if modo == "👨‍💼 Admin (Oficina)":
         vista_admin()
     else:
         vista_tecnico()

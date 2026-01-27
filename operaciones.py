@@ -124,7 +124,7 @@ def generar_pdf_evidencia(datos, fotos):
                 y, x = 20, x_start
     return pdf.output(dest='S').encode('latin-1')
 
-def generar_pdf_resumen_final(cliente, fecha, unidades_df, costo_total, metodo_pago, efectivo_recibido, comision_tecnico):
+def generar_pdf_resumen_final(cliente, fecha, unidades_df, metodo_pago, efectivo_recibido, comision_tecnico):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font('Arial', 'B', 16)
@@ -155,17 +155,17 @@ def generar_pdf_resumen_final(cliente, fecha, unidades_df, costo_total, metodo_p
     pdf.set_font('Arial', 'B', 14)
     pdf.cell(0, 10, "DETALLE FINANCIERO:", 0, 1)
     pdf.set_font('Arial', '', 12)
-    pdf.cell(0, 8, f"Costo Total Cliente: ${costo_total:,.2f}", 0, 1)
-    pdf.cell(0, 8, f"Metodo: {metodo_pago}", 0, 1)
+    
+    pdf.cell(0, 8, f"Forma de Pago del Cliente: {metodo_pago}", 0, 1)
     
     if metodo_pago == "Efectivo":
         pdf.set_font('Arial', 'B', 12)
         pdf.set_text_color(0, 100, 0)
-        pdf.cell(0, 8, f"Efectivo Recibido: ${efectivo_recibido:,.2f}", 0, 1)
+        pdf.cell(0, 8, f"Efectivo Recibido por Técnico: ${efectivo_recibido:,.2f}", 0, 1)
     else:
         pdf.set_font('Arial', 'I', 11)
         pdf.set_text_color(100, 100, 100)
-        pdf.cell(0, 8, "Cobro via Transferencia/Credito", 0, 1)
+        pdf.cell(0, 8, "El técnico NO recibió dinero (Transferencia Directa).", 0, 1)
     
     pdf.set_text_color(0, 0, 0)
     pdf.ln(5)
@@ -175,7 +175,7 @@ def generar_pdf_resumen_final(cliente, fecha, unidades_df, costo_total, metodo_p
     return pdf.output(dest='S').encode('latin-1')
 
 def generar_pdf_cierre_dia(fecha_hoy, df_instalaciones, df_agenda_hoy):
-    """Genera el reporte diario con la suma real de comisiones"""
+    """Genera el reporte diario SIN calcular balance"""
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font('Arial', 'B', 18)
@@ -203,26 +203,23 @@ def generar_pdf_cierre_dia(fecha_hoy, df_instalaciones, df_agenda_hoy):
 
     pdf.ln(10)
     
-    # 2. CÁLCULOS FINANCIEROS REALES
+    # 2. CÁLCULOS
     efectivo_mano = 0.0
     total_comision_tecnico = 0.0
     
     if not df_agenda_hoy.empty:
-        # Limpieza de datos numéricos
+        # Limpieza
         df_agenda_hoy['Cobro_Final'] = pd.to_numeric(df_agenda_hoy['Cobro_Final'], errors='coerce').fillna(0)
         
-        # Ojo: Columna nueva Pago_Tecnico
         if 'Pago_Tecnico' in df_agenda_hoy.columns:
              df_agenda_hoy['Pago_Tecnico'] = pd.to_numeric(df_agenda_hoy['Pago_Tecnico'], errors='coerce').fillna(0)
              total_comision_tecnico = df_agenda_hoy['Pago_Tecnico'].sum()
-        else:
-             total_comision_tecnico = 0.0
 
         # Efectivo solo si el tipo de pago fue Efectivo
         pagos_efectivo = df_agenda_hoy[df_agenda_hoy['Tipo_Pago'] == 'Efectivo']
         efectivo_mano = pagos_efectivo['Cobro_Final'].sum()
 
-    # 3. TABLA DE TOTALES
+    # 3. TABLA DE TOTALES (SEPARADOS)
     pdf.set_font('Arial', 'B', 16)
     pdf.cell(0, 10, "RESUMEN FINANCIERO DEL DÍA", 0, 1, 'C')
     pdf.ln(5)
@@ -232,31 +229,26 @@ def generar_pdf_cierre_dia(fecha_hoy, df_instalaciones, df_agenda_hoy):
     pdf.set_font('Arial', 'B', 12)
     pdf.cell(0, 10, f"{total_unidades_dia}", 1, 1, 'C')
     
-    pdf.set_font('Arial', '', 12)
-    pdf.cell(100, 10, "Efectivo en manos del Técnico:", 1, 0)
-    pdf.set_font('Arial', 'B', 12)
-    pdf.set_text_color(0, 150, 0) # Verde
-    pdf.cell(0, 10, f"${efectivo_mano:,.2f}", 1, 1, 'C')
-    pdf.set_text_color(0, 0, 0)
+    pdf.ln(10)
     
+    # CUADRO DE EFECTIVO
+    pdf.set_fill_color(220, 255, 220) # Verde clarito
     pdf.set_font('Arial', '', 12)
-    pdf.cell(100, 10, "Total a Pagar al Técnico:", 1, 0)
-    pdf.set_font('Arial', 'B', 12)
-    pdf.set_text_color(200, 0, 0) # Rojo
-    pdf.cell(0, 10, f"${total_comision_tecnico:,.2f}", 1, 1, 'C')
-    pdf.set_text_color(0, 0, 0)
-
-    pdf.ln(5)
-    
-    # Balance
-    balance = efectivo_mano - total_comision_tecnico
+    pdf.cell(120, 10, "EFECTIVO EN MANOS DEL TÉCNICO:", 1, 0, 'L', 1)
     pdf.set_font('Arial', 'B', 14)
-    if balance > 0:
-        pdf.cell(0, 15, f"El técnico debe entregar a Oficina: ${balance:,.2f}", 0, 1, 'C')
-    elif balance < 0:
-        pdf.cell(0, 15, f"Oficina debe pagar al técnico: ${abs(balance):,.2f}", 0, 1, 'C')
-    else:
-        pdf.cell(0, 15, "Cuentas saldadas ($0.00)", 0, 1, 'C')
+    pdf.set_text_color(0, 100, 0) # Verde oscuro
+    pdf.cell(0, 10, f"${efectivo_mano:,.2f}", 1, 1, 'R', 1)
+    
+    pdf.ln(5)
+    pdf.set_text_color(0, 0, 0) # Reset color
+
+    # CUADRO DE NÓMINA
+    pdf.set_fill_color(220, 230, 255) # Azul clarito
+    pdf.set_font('Arial', '', 12)
+    pdf.cell(120, 10, "NÓMINA / COMISIONES DEL DÍA:", 1, 0, 'L', 1)
+    pdf.set_font('Arial', 'B', 14)
+    pdf.set_text_color(0, 0, 150) # Azul oscuro
+    pdf.cell(0, 10, f"${total_comision_tecnico:,.2f}", 1, 1, 'R', 1)
 
     return pdf.output(dest='S').encode('latin-1')
 
@@ -297,7 +289,7 @@ def vista_admin():
 
     with tab2:
         st.subheader("🌙 Generar Reporte Diario (Cierre)")
-        st.info("Esto calcula cuánto efectivo trae el técnico vs cuánto le debes de sus comisiones.")
+        st.info("Genera un PDF con el resumen de actividad, efectivo recolectado y nómina acumulada.")
         
         if st.button("📩 GENERAR Y ENVIAR CIERRE", type="primary", use_container_width=True):
             hoy_str = hora_mexico().strftime("%d/%m/%Y")
@@ -312,9 +304,7 @@ def vista_admin():
             # 2. Agenda de HOY (Finanzas)
             try:
                 df_ag = conn.read(worksheet="Agenda_Servicios", ttl=0)
-                # La fecha de cierre real es cuando cambió el estatus, pero usaremos fecha prog por simplicidad o ID
-                # Lo mejor es filtrar las ordenes que esten FINALIZADAS y cuya instalacion haya sido hoy
-                # Para simplificar, buscamos los IDs de las instalaciones de hoy en la agenda
+                # Buscamos por instalaciones vinculadas
                 ids_hoy = inst_hoy['ID_Servicio'].unique()
                 ag_hoy = df_ag[df_ag['ID'].isin(ids_hoy)]
                 ag_hoy = ag_hoy[ag_hoy['Estatus'] == "FINALIZADO"]
@@ -326,7 +316,7 @@ def vista_admin():
                 pdf_cierre = generar_pdf_cierre_dia(hoy_str, inst_hoy, ag_hoy)
                 
                 nombre_rep = f"REPORTE_DIARIO_{hoy_str.replace('/','-')}.pdf"
-                cuerpo = f"Adjunto encontrarás el reporte de operaciones del día {hoy_str}.\n\nSe incluyen las comisiones reportadas por el técnico."
+                cuerpo = f"Adjunto encontrarás el reporte de operaciones del día {hoy_str}."
                 
                 with st.spinner("Enviando reporte a Gerencia..."):
                     ok, msg = enviar_reporte_email(pdf_cierre, nombre_rep, f"🌙 Cierre del Día: {hoy_str}", cuerpo)
@@ -417,26 +407,27 @@ def vista_tecnico():
 
     st.divider()
 
-    # --- CIERRE DE ORDEN (CON COMISIÓN DEL TÉCNICO) ---
+    # --- CIERRE DE ORDEN ---
     with st.expander("💰 Finalizar Orden (Cobro y Cierre)", expanded=True):
-        st.markdown("### Datos Financieros")
+        st.markdown("### Cierre del Servicio")
         
-        col_costo, col_comision = st.columns(2)
-        costo_servicio = col_costo.number_input("💵 Costo Total Cliente ($)", min_value=0.0, step=50.0)
-        comision_tecnico = col_comision.number_input("💰 Tu Comisión / Mano de Obra ($)", min_value=0.0, step=50.0, help="Lo que te toca a ti por este trabajo")
+        comision_tecnico = st.number_input("💰 ¿Cuánto es tu comisión / mano de obra por este trabajo?", min_value=0.0, step=50.0)
         
-        tipo_pago = st.selectbox("Método de Pago", ["Transferencia", "Efectivo", "Pendiente/Crédito"])
+        st.markdown("---")
+        st.write("¿El cliente te pagó en **Efectivo**?")
         
+        es_efectivo = st.toggle("SÍ, recibí efectivo")
+        
+        tipo_pago = "Transferencia"
         efectivo_recibido = 0.0
-        if tipo_pago == "Efectivo":
-            st.info(f"El técnico debe recolectar: ${costo_servicio:,.2f}")
-            efectivo_recibido = st.number_input("Efectivo Recibido ($)", min_value=0.0, value=costo_servicio, step=50.0)
-        elif tipo_pago == "Transferencia":
-            st.caption("ℹ️ El técnico NO recibe dinero.")
+        
+        if es_efectivo:
+            tipo_pago = "Efectivo"
+            efectivo_recibido = st.number_input("💵 ¿Cuánto dinero recibiste?", min_value=0.0, step=50.0)
+        else:
+            st.caption("ℹ️ Se asume pago por Transferencia. No recibiste dinero.")
         
         if st.button("🔒 CERRAR ORDEN Y ENVIAR RESUMEN"):
-            if costo_servicio == 0 and tipo_pago != "Pendiente/Crédito":
-                st.warning("⚠️ ¿El costo es $0? Verifica.")
             
             with st.spinner("Generando reporte final..."):
                 try:
@@ -445,7 +436,8 @@ def vista_tecnico():
                 except: unidades_orden = pd.DataFrame()
 
                 fecha_cierre = hora_mexico().strftime("%d/%m/%Y %H:%M")
-                pdf_resumen = generar_pdf_resumen_final(orden['Cliente'], fecha_cierre, unidades_orden, costo_servicio, tipo_pago, efectivo_recibido, comision_tecnico)
+                # Pasamos 0 en "costo_total" porque el tecnico ya no lo llena
+                pdf_resumen = generar_pdf_resumen_final(orden['Cliente'], fecha_cierre, unidades_orden, "N/A", tipo_pago, efectivo_recibido, comision_tecnico)
                 
                 cuerpo_resumen = f"""
                 SERVICIO FINALIZADO
@@ -453,9 +445,8 @@ def vista_tecnico():
                 Total Unidades: {len(unidades_orden)}
                 
                 --- FINANZAS ---
-                Costo Total Cliente: ${costo_servicio:,.2f}
-                Método: {tipo_pago}
-                Efectivo Recibido: ${efectivo_recibido:,.2f}
+                Método de Pago: {tipo_pago}
+                Efectivo Recibido por Técnico: ${efectivo_recibido:,.2f}
                 
                 --- NOMINA ---
                 Comisión Técnico: ${comision_tecnico:,.2f}
@@ -472,7 +463,7 @@ def vista_tecnico():
                     df_agenda_fresh.at[idx_final, "Estatus"] = "FINALIZADO"
                     df_agenda_fresh.at[idx_final, "Cobro_Final"] = efectivo_recibido 
                     df_agenda_fresh.at[idx_final, "Tipo_Pago"] = tipo_pago
-                    df_agenda_fresh.at[idx_final, "Pago_Tecnico"] = comision_tecnico # Guardamos la comisión
+                    df_agenda_fresh.at[idx_final, "Pago_Tecnico"] = comision_tecnico
                     
                     conn.update(worksheet="Agenda_Servicios", data=df_agenda_fresh)
                     st.balloons()

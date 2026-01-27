@@ -208,18 +208,15 @@ def generar_pdf_cierre_dia(fecha_hoy, df_instalaciones, df_agenda_hoy):
     total_comision_tecnico = 0.0
     
     if not df_agenda_hoy.empty:
-        # Limpieza
         df_agenda_hoy['Cobro_Final'] = pd.to_numeric(df_agenda_hoy['Cobro_Final'], errors='coerce').fillna(0)
-        
         if 'Pago_Tecnico' in df_agenda_hoy.columns:
              df_agenda_hoy['Pago_Tecnico'] = pd.to_numeric(df_agenda_hoy['Pago_Tecnico'], errors='coerce').fillna(0)
              total_comision_tecnico = df_agenda_hoy['Pago_Tecnico'].sum()
 
-        # Efectivo solo si el tipo de pago fue Efectivo
         pagos_efectivo = df_agenda_hoy[df_agenda_hoy['Tipo_Pago'] == 'Efectivo']
         efectivo_mano = pagos_efectivo['Cobro_Final'].sum()
 
-    # 3. TABLA DE TOTALES (SEPARADOS)
+    # 3. TABLA DE TOTALES
     pdf.set_font('Arial', 'B', 16)
     pdf.cell(0, 10, "RESUMEN FINANCIERO DEL DÍA", 0, 1, 'C')
     pdf.ln(5)
@@ -231,23 +228,22 @@ def generar_pdf_cierre_dia(fecha_hoy, df_instalaciones, df_agenda_hoy):
     
     pdf.ln(10)
     
-    # CUADRO DE EFECTIVO
-    pdf.set_fill_color(220, 255, 220) # Verde clarito
+    # CUADROS FINANCIEROS
+    pdf.set_fill_color(220, 255, 220) 
     pdf.set_font('Arial', '', 12)
     pdf.cell(120, 10, "EFECTIVO EN MANOS DEL TÉCNICO:", 1, 0, 'L', 1)
     pdf.set_font('Arial', 'B', 14)
-    pdf.set_text_color(0, 100, 0) # Verde oscuro
+    pdf.set_text_color(0, 100, 0) 
     pdf.cell(0, 10, f"${efectivo_mano:,.2f}", 1, 1, 'R', 1)
     
     pdf.ln(5)
-    pdf.set_text_color(0, 0, 0) # Reset color
+    pdf.set_text_color(0, 0, 0) 
 
-    # CUADRO DE NÓMINA
-    pdf.set_fill_color(220, 230, 255) # Azul clarito
+    pdf.set_fill_color(220, 230, 255) 
     pdf.set_font('Arial', '', 12)
     pdf.cell(120, 10, "NÓMINA / COMISIONES DEL DÍA:", 1, 0, 'L', 1)
     pdf.set_font('Arial', 'B', 14)
-    pdf.set_text_color(0, 0, 150) # Azul oscuro
+    pdf.set_text_color(0, 0, 150) 
     pdf.cell(0, 10, f"${total_comision_tecnico:,.2f}", 1, 1, 'R', 1)
 
     return pdf.output(dest='S').encode('latin-1')
@@ -289,22 +285,16 @@ def vista_admin():
 
     with tab2:
         st.subheader("🌙 Generar Reporte Diario (Cierre)")
-        st.info("Genera un PDF con el resumen de actividad, efectivo recolectado y nómina acumulada.")
-        
         if st.button("📩 GENERAR Y ENVIAR CIERRE", type="primary", use_container_width=True):
             hoy_str = hora_mexico().strftime("%d/%m/%Y")
-            
-            # 1. Instalaciones de HOY
             try:
                 df_inst = conn.read(worksheet="Instalaciones", ttl=0)
                 df_inst['Fecha_DT'] = pd.to_datetime(df_inst['Fecha'], format="%d/%m/%Y", errors='coerce')
                 inst_hoy = df_inst[df_inst['Fecha_DT'].dt.date == hora_mexico().date()]
             except: inst_hoy = pd.DataFrame()
 
-            # 2. Agenda de HOY (Finanzas)
             try:
                 df_ag = conn.read(worksheet="Agenda_Servicios", ttl=0)
-                # Buscamos por instalaciones vinculadas
                 ids_hoy = inst_hoy['ID_Servicio'].unique()
                 ag_hoy = df_ag[df_ag['ID'].isin(ids_hoy)]
                 ag_hoy = ag_hoy[ag_hoy['Estatus'] == "FINALIZADO"]
@@ -314,16 +304,15 @@ def vista_admin():
                 st.warning("No se registraron instalaciones hoy.")
             else:
                 pdf_cierre = generar_pdf_cierre_dia(hoy_str, inst_hoy, ag_hoy)
-                
                 nombre_rep = f"REPORTE_DIARIO_{hoy_str.replace('/','-')}.pdf"
-                cuerpo = f"Adjunto encontrarás el reporte de operaciones del día {hoy_str}."
+                cuerpo = f"Adjunto encontrarás el reporte del día {hoy_str}."
                 
-                with st.spinner("Enviando reporte a Gerencia..."):
+                with st.spinner("Enviando reporte..."):
                     ok, msg = enviar_reporte_email(pdf_cierre, nombre_rep, f"🌙 Cierre del Día: {hoy_str}", cuerpo)
                 
                 if ok:
                     st.balloons()
-                    st.success("✅ Reporte enviado correctamente.")
+                    st.success("✅ Reporte enviado.")
                 else: st.error(f"Error enviando correo: {msg}")
 
     with tab3:
@@ -407,6 +396,21 @@ def vista_tecnico():
 
     st.divider()
 
+    # --- VISUALIZACIÓN DE PROGRESO (NUEVO) ---
+    st.markdown("#### 📋 Avance de la Orden Actual")
+    try:
+        df_inst = conn.read(worksheet="Instalaciones", ttl=0)
+        unidades_listas = df_inst[df_inst['ID_Servicio'] == id_orden]
+        
+        if not unidades_listas.empty:
+            st.info(f"Llevas **{len(unidades_listas)}** vehículos registrados en esta visita.")
+            st.table(unidades_listas[['Unidad', 'Fecha']])
+        else:
+            st.caption("Aún no has registrado vehículos en esta visita.")
+    except: pass
+
+    st.divider()
+
     # --- CIERRE DE ORDEN ---
     with st.expander("💰 Finalizar Orden (Cobro y Cierre)", expanded=True):
         st.markdown("### Cierre del Servicio")
@@ -428,7 +432,6 @@ def vista_tecnico():
             st.caption("ℹ️ Se asume pago por Transferencia. No recibiste dinero.")
         
         if st.button("🔒 CERRAR ORDEN Y ENVIAR RESUMEN"):
-            
             with st.spinner("Generando reporte final..."):
                 try:
                     df_inst = conn.read(worksheet="Instalaciones", ttl=0)
@@ -436,8 +439,8 @@ def vista_tecnico():
                 except: unidades_orden = pd.DataFrame()
 
                 fecha_cierre = hora_mexico().strftime("%d/%m/%Y %H:%M")
-                # Pasamos 0 en "costo_total" porque el tecnico ya no lo llena
-                pdf_resumen = generar_pdf_resumen_final(orden['Cliente'], fecha_cierre, unidades_orden, "N/A", tipo_pago, efectivo_recibido, comision_tecnico)
+                
+                pdf_resumen = generar_pdf_resumen_final(orden['Cliente'], fecha_cierre, unidades_orden, tipo_pago, efectivo_recibido, comision_tecnico)
                 
                 cuerpo_resumen = f"""
                 SERVICIO FINALIZADO
